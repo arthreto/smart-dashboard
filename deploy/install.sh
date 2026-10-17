@@ -344,16 +344,30 @@ fi
 # Fins de ligne Windows éventuelles (projet copié depuis un PC).
 find "$APP_DIR/deploy" -type f \( -name '*.sh' -o -name '*.service' -o -name '*.conf' \) -exec sed -i 's/\r$//' {} +
 
+# Installe les dépendances exactes du projet ; si le fichier de versions ne convient pas
+# à ce processeur ou à cette version de npm, retombe sur une installation classique.
+deps() {
+  npm ci --no-audit --no-fund --loglevel=error ||
+    { warn "npm ci impossible, installation classique des dépendances"; npm install --no-audit --no-fund --loglevel=error; }
+}
+
 say "Compilation de l'API"
 cd "$APP_DIR/server"
-npm ci --no-audit --no-fund
+deps
 npm run build
+# Modules natifs (base SQLite, images) : vérifiés tout de suite plutôt qu'au démarrage.
+native_ok() { "$NODE_BIN" -e "new (require('better-sqlite3'))(':memory:'); require('sharp')" >/dev/null 2>&1; }
+if ! native_ok; then
+  warn "modules natifs à recompiler pour ce serveur ($(uname -m), Node $("$NODE_BIN" -v))"
+  npm rebuild better-sqlite3 sharp --loglevel=error || true
+  native_ok || die "better-sqlite3 ou sharp ne se charge pas : envoie-moi la sortie de « cd $APP_DIR/server && node -e \"require('better-sqlite3'); require('sharp')\" »."
+fi
 say "Compilation de la console web"
 cd "$APP_DIR/web"
-npm ci --no-audit --no-fund
+deps
 npm run build
 cd "$APP_DIR/server"
-npm prune --omit=dev --no-audit --no-fund >/dev/null
+npm prune --omit=dev --no-audit --no-fund --loglevel=error >/dev/null
 
 if [ ! -f "$ENV_FILE" ]; then
   say "Création de la configuration ($ENV_FILE)"

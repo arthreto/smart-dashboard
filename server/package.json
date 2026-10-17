@@ -34,5 +34,10 @@
     "@types/qrcode": "^1.5.5",
     "tsx": "^4.19.4",
     "typescript": "^5.8.3"
+  },
+  "allowScripts": {
+    "better-sqlite3": true,
+    "esbuild": true,
+    "sharp": true
   }
 }
