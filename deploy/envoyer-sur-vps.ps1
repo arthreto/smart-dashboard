@@ -1,7 +1,13 @@
 ﻿# Envoie le projet sur ton VPS et lance l'installation (ou la mise à jour).
 # À lancer depuis Windows (PowerShell), dans le dossier du projet :
 #
+#   1) Vérifier d'abord (ne modifie RIEN sur le VPS, affiche ce qui serait ajouté) :
+#   powershell -ExecutionPolicy Bypass -File deploy\envoyer-sur-vps.ps1 -Serveur utilisateur@ip-du-vps -Domaine dashboard.mon-domaine.fr -Verifier
+#
+#   2) Installer (le plan est réaffiché et une confirmation est demandée) :
 #   powershell -ExecutionPolicy Bypass -File deploy\envoyer-sur-vps.ps1 -Serveur utilisateur@ip-du-vps -Domaine dashboard.mon-domaine.fr -Email moi@exemple.fr
+#
+#   -SansNginx : n'ajoute rien dans Nginx (tu crées toi-même le proxy, par exemple dans ton panneau).
 #
 # Prérequis : OpenSSH (inclus dans Windows 10/11 : commandes ssh et scp) et un
 # compte sur le VPS qui peut utiliser sudo.
@@ -9,7 +15,9 @@ param(
     [Parameter(Mandatory = $true)][string]$Serveur,
     [Parameter(Mandatory = $true)][string]$Domaine,
     [string]$Email = "",
-    [int]$Port = 22
+    [int]$Port = 22,
+    [switch]$Verifier,
+    [switch]$SansNginx
 )
 $ErrorActionPreference = "Stop"
 
@@ -34,13 +42,26 @@ Write-Host "==> Envoi sur $Serveur" -ForegroundColor Cyan
 scp -P $Port $archive "${Serveur}:/tmp/smart-dashboard.tgz"
 if ($LASTEXITCODE -ne 0) { throw "scp a échoué (vérifie l'adresse et ton accès SSH)" }
 
-Write-Host "==> Installation sur le VPS (le mot de passe sudo peut être demandé)" -ForegroundColor Cyan
+$options = @()
+if ($Verifier) { $options += "--verifier" }
+if ($SansNginx) { $options += "--sans-nginx" }
+$opts = ($options -join " ")
+if ($Verifier) {
+    Write-Host "==> Vérification du VPS (rien n'est modifié ; le mot de passe sudo peut être demandé)" -ForegroundColor Cyan
+} else {
+    Write-Host "==> Installation sur le VPS (le mot de passe sudo peut être demandé)" -ForegroundColor Cyan
+}
 $src = "/tmp/smart-dashboard-src/$nom"
 $cmd = "rm -rf /tmp/smart-dashboard-src && mkdir -p /tmp/smart-dashboard-src && " +
        "tar -xzf /tmp/smart-dashboard.tgz -C /tmp/smart-dashboard-src && " +
        "sed -i 's/\r`$//' '$src/deploy/install.sh' && " +
-       "sudo bash '$src/deploy/install.sh' '$Domaine' '$Email'"
+       "sudo bash '$src/deploy/install.sh' $opts '$Domaine' '$Email'"
 ssh -t -p $Port $Serveur $cmd
-if ($LASTEXITCODE -ne 0) { throw "l'installation a échoué (voir les messages ci-dessus)" }
+if ($Verifier) {
+    if ($LASTEXITCODE -ne 0) { throw "la vérification signale un point à corriger (voir ci-dessus) : rien n'a été modifié" }
+    Write-Host "==> Vérification terminée, rien n'a été modifié. Relance sans -Verifier pour installer." -ForegroundColor Green
+    exit 0
+}
+if ($LASTEXITCODE -ne 0) { throw "l'installation n'a pas abouti (voir les messages ci-dessus)" }
 
 Write-Host "==> Terminé : https://$Domaine" -ForegroundColor Green

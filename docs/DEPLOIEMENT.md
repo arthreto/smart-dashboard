@@ -1,8 +1,10 @@
 # Mettre le serveur en ligne sur ton VPS
 
 Le serveur (API + console web) tourne en **Node.js** derrière le **Nginx déjà
-installé** sur ton VPS. Il ne touche pas à tes autres sites (phpMyAdmin, etc.) :
-il ajoute simplement un site pour un sous-domaine, avec HTTPS gratuit (Let's Encrypt).
+installé** sur ton VPS, à côté de tes sites existants. Il ne touche pas à tes autres
+sites (phpMyAdmin, etc.) : il ajoute seulement un site pour un sous-domaine, avec
+HTTPS gratuit (Let's Encrypt). Une **vérification sans aucune modification** permet
+de voir tout ce qui serait ajouté avant d'installer (étape 2).
 Les données sont dans une base SQLite (`/var/lib/smart-dashboard`), donc rien à
 configurer dans MySQL.
 
@@ -20,37 +22,109 @@ Attends que `ping dashboard.mon-domaine.fr` réponde avec l'IP du VPS (quelques
 minutes en général). Les ports 80 et 443 doivent être ouverts (ils le sont déjà
 si Nginx sert tes autres sites).
 
-## 2. Installer (depuis Windows, en une commande)
+## 2. Vérifier ton VPS (ne modifie rien)
+
+Ton VPS a déjà Nginx et d'autres sites : avant d'installer quoi que ce soit, lance
+la **vérification**. Elle envoie le projet sur le VPS, analyse la configuration
+(Nginx, sites existants, ports, Node.js, DNS) et affiche exactement ce qui serait
+ajouté — **sans rien modifier**.
 
 Dans PowerShell, depuis le dossier du projet (`C:\Users\super\source\smart-dashboard`) :
+
+```powershell
+powershell -ExecutionPolicy Bypass -File deploy\envoyer-sur-vps.ps1 -Serveur utilisateur@IP-DU-VPS -Domaine dashboard.mon-domaine.fr -Verifier
+```
+
+Exemple de résultat :
+
+```
+==> Analyse du VPS (rien n'est modifié)
+  ✓ Système : Ubuntu 24.04 LTS
+  ✓ Nginx : nginx/1.24.0 (/etc/nginx/nginx.conf)
+  ✓ Port 80 : utilisé par nginx
+  ✓ Sites Nginx existants : 3 nom(s) de domaine — ils ne seront pas modifiés
+  ✓ dashboard.mon-domaine.fr n'est utilisé par aucun site existant
+  ✓ Node.js : v18.19.0 sur le système → Node 22 PRIVÉ dans /opt/smart-dashboard/node (celui du système reste intact)
+  ✓ Application : écoutera sur 127.0.0.1:8787 (accessible seulement via Nginx)
+  ✓ DNS : dashboard.mon-domaine.fr → 51.xx.xx.xx (ce VPS)
+```
+
+Si un point est marqué ✗ (sous-domaine déjà utilisé, port pris…), corrige-le puis
+relance la vérification.
+
+### Ce qui est ajouté sur ton VPS (et rien d'autre)
+
+| Ajout | Détail |
+|---|---|
+| `/opt/smart-dashboard` | l'application |
+| `/var/lib/smart-dashboard` | ses données (base SQLite) |
+| utilisateur système `smartdash` | le service tourne avec ce compte limité, pas en root |
+| service `smart-dashboard` | écoute seulement sur `127.0.0.1` (port 8787, ou le suivant libre) : invisible depuis Internet |
+| Node.js | celui du système s'il est en version 20 ou plus ; sinon un **Node 22 privé** dans `/opt/smart-dashboard/node`. Le Node du système et tes autres applis Node ne sont jamais modifiés |
+| paquets manquants seulement | `rsync`, `build-essential`, `certbot`… (aucun paquet déjà installé n'est mis à jour) |
+| **un** fichier de site Nginx | `/etc/nginx/sites-available/smart-dashboard` (ou `conf.d/smart-dashboard.conf`), pour ton sous-domaine uniquement |
+| certificat HTTPS | Let's Encrypt, pour ton sous-domaine uniquement |
+
+Ne sont **pas** touchés : `nginx.conf`, tes autres sites, phpMyAdmin, MySQL. Nginx est
+seulement *rechargé* (sans coupure), et uniquement si `nginx -t` valide la
+configuration ; sinon le fichier ajouté est retiré et tout reste comme avant.
+
+## 3. Installer
+
+Même commande, sans `-Verifier` et avec ton e-mail (pour le certificat HTTPS) :
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File deploy\envoyer-sur-vps.ps1 -Serveur utilisateur@IP-DU-VPS -Domaine dashboard.mon-domaine.fr -Email moi@exemple.fr
 ```
 
-Le script :
+Le script réaffiche le plan et **demande confirmation** (`o` pour continuer). Ensuite
+il compile l'application, crée la configuration (avec une clé de chiffrement
+générée) et te demande de **choisir le mot de passe de la console** — avant la mise
+en ligne, pour que personne ne puisse créer le compte à ta place.
 
-1. crée une archive du projet (sans `node_modules`) et l'envoie par `scp` ;
-2. lance `deploy/install.sh` sur le VPS avec `sudo`, qui :
-   - installe Node.js 22 si besoin (NodeSource), Certbot et les outils de compilation ;
-   - copie le projet dans `/opt/smart-dashboard`, compile l'API et la console ;
-   - crée `/opt/smart-dashboard/server/.env` avec une **clé de chiffrement générée** ;
-   - installe le service `smart-dashboard` (systemd, utilisateur dédié `smartdash`) ;
-   - ajoute le site Nginx `smart-dashboard` et demande le certificat HTTPS ;
-   - te demande de **choisir le mot de passe de la console** (avant la mise en ligne :
-     personne ne peut créer le compte à ta place depuis Internet).
-
-> Le VPS doit être sous Debian ou Ubuntu. Ton compte doit pouvoir utiliser `sudo`.
+> Le VPS doit être sous Debian ou Ubuntu, et ton compte doit pouvoir utiliser `sudo`.
 
 ### Variante : à la main sur le VPS
 
 ```bash
 # depuis ton PC : copie le dossier (WinSCP, FileZilla, scp…) vers le VPS, puis sur le VPS :
 cd smart-dashboard
-sudo bash deploy/install.sh dashboard.mon-domaine.fr moi@exemple.fr
+sudo bash deploy/install.sh --verifier dashboard.mon-domaine.fr        # ne modifie rien
+sudo bash deploy/install.sh dashboard.mon-domaine.fr moi@exemple.fr    # installe
 ```
 
-## 3. Première connexion
+### Nginx géré autrement (panneau, Docker…)
+
+Si ton Nginx est géré par un panneau (aaPanel, Plesk, CloudPanel, HestiaCP…), tourne
+dans Docker, ou si tu préfères écrire la configuration toi-même, le script le détecte
+(ou ajoute `-SansNginx`) : il installe l'application **sans toucher à Nginx**. Il te
+reste à créer le site toi-même :
+
+- **Dans un panneau** : crée le site `dashboard.mon-domaine.fr`, active HTTPS, puis
+  ajoute un *reverse proxy* vers `http://127.0.0.1:8787`.
+- **À la main** : un fichier de site comme celui-ci, puis `sudo nginx -t` et
+  `sudo systemctl reload nginx`, puis `sudo certbot --nginx -d dashboard.mon-domaine.fr` :
+
+```nginx
+server {
+    listen 80;
+    server_name dashboard.mon-domaine.fr;
+    client_max_body_size 20m;
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+(Le port exact est affiché par la vérification ; il est aussi dans
+`/opt/smart-dashboard/server/.env`, ligne `PORT=`.)
+
+## 4. Première connexion
 
 Ouvre `https://dashboard.mon-domaine.fr`, connecte-toi avec le mot de passe choisi,
 puis :
@@ -66,7 +140,7 @@ puis :
 
 Relance simplement la même commande `envoyer-sur-vps.ps1` (ou `install.sh`) : le
 projet est recompilé, le service redémarré, et **les données comme la
-configuration sont conservées**.
+configuration sont conservées** (le site Nginx déjà en place n'est pas réécrit).
 
 ## Commandes utiles sur le VPS
 

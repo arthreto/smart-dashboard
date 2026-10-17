@@ -60,7 +60,8 @@ Captures de l'émulateur (données d'exemple) — toutes dans [docs/captures](do
 ## Démarrage rapide
 
 1. **Mettre le serveur en ligne sur le VPS** → [docs/DEPLOIEMENT.md](docs/DEPLOIEMENT.md)
-   (une commande depuis Windows : `deploy\envoyer-sur-vps.ps1`).
+   (depuis Windows : `deploy\envoyer-sur-vps.ps1 … -Verifier` pour tout vérifier sans
+   rien modifier, puis la même commande sans `-Verifier` ; tes sites existants ne sont pas touchés).
 2. **Brancher les services** (Spotify, Roblox, Pathé, iCloud, météo) dans la console
    → [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
 3. **Essayer l'écran sur ton PC** en attendant la tablette → [docs/EMULATEUR.md](docs/EMULATEUR.md)
