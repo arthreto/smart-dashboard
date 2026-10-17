@@ -14,6 +14,8 @@ namespace {
 constexpr int HOUR_H = 36;
 constexpr int FIRST_HOUR = 7;
 constexpr int LAST_HOUR = 20;
+constexpr int GRID_TOP = 9;  // marge pour que l'heure soit centrée sur sa ligne, même la première
+constexpr int LINE_H = 18;   // hauteur d'une ligne de texte fig_s14 / fig_m14
 const char* const DAY_SHORT[7] = {"LUN.", "MAR.", "MER.", "JEU.", "VEN.", "SAM.", "DIM."};
 
 int isoWeek(const struct tm& t) {
@@ -51,6 +53,10 @@ void buildCalendar(lv_obj_t* parent) {
     lv_obj_set_style_pad_hor(wk, 18, 0);
     lv_obj_set_style_pad_top(wk, 14, 0);
     lv_obj_set_style_pad_bottom(wk, 16, 0);
+    // Colonne de droite créée tout de suite (remplie plus bas) : la largeur de la vue
+    // semaine est alors définitive et peut être mesurée.
+    lv_obj_t* right = col(body, 14);
+    lv_obj_set_size(right, 380, lv_pct(100));
 
     int wdToday = util::weekdayMon0(now);
     lv_obj_t* heads = row(wk, 0);
@@ -67,21 +73,27 @@ void buildCalendar(lv_obj_t* parent) {
         lv_obj_set_flex_align(c, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
         bool isToday = d == wdToday;
         label(c, DAY_SHORT[d], &fig_s14, isToday ? (th().dark ? lv_color_hex(0xFF6961) : lv_color_hex(0xD70015)) : th().text2);
+        // Même case de 34 px pour tous les jours : les en-têtes restent alignés.
+        lv_obj_t* num = box(c);
+        lv_obj_set_size(num, 34, 34);
         if (isToday) {
-            lv_obj_t* circle = box(c);
-            lv_obj_set_size(circle, 34, 34);
-            lv_obj_set_style_radius(circle, 17, 0);
-            setBg(circle, color::red());
-            lv_obj_t* n = label(circle, std::to_string(day.tm_mday), &fig_s20, color::white());
-            lv_obj_center(n);
+            lv_obj_set_style_radius(num, 17, 0);
+            setBg(num, color::red());
+            lv_obj_center(label(num, std::to_string(day.tm_mday), &fig_s20, color::white()));
         } else {
-            label(c, std::to_string(day.tm_mday), &fig_s22, th().text);
+            lv_obj_center(label(num, std::to_string(day.tm_mday), &fig_s22, th().text));
         }
     }
 
+    // Largeur utile du texte dans un événement (colonne − marges), pour savoir si le
+    // titre tient sur une ligne.
+    lv_obj_update_layout(heads);
+    int evTextW = lv_obj_get_width(lv_obj_get_child(heads, 1)) * 94 / 100 - 15;
+    if (evTextW < 40) evTextW = 70;
+
     lv_obj_t* grid = row(wk, 0);
-    lv_obj_set_size(grid, lv_pct(100), HOUR_H * (LAST_HOUR - FIRST_HOUR));
-    lv_obj_set_style_margin_top(grid, 8, 0);
+    lv_obj_set_size(grid, lv_pct(100), GRID_TOP + HOUR_H * (LAST_HOUR - FIRST_HOUR));
+    lv_obj_set_style_margin_top(grid, 2, 0);
     lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_t* hours = box(grid);
     lv_obj_set_size(hours, 48, lv_pct(100));
@@ -89,7 +101,7 @@ void buildCalendar(lv_obj_t* parent) {
         char b[8];
         snprintf(b, sizeof b, "%02d:00", h);
         lv_obj_t* l = label(hours, b, &fig_m14, th().text3);
-        lv_obj_set_pos(l, 0, std::max(0, (h - FIRST_HOUR) * HOUR_H - 7));  // la première reste dans le cadre
+        lv_obj_set_pos(l, 0, GRID_TOP + (h - FIRST_HOUR) * HOUR_H - LINE_H / 2);
     }
     for (int d = 0; d < 7; d++) {
         lv_obj_t* column = box(grid);
@@ -102,7 +114,7 @@ void buildCalendar(lv_obj_t* parent) {
         for (int h = 0; h < LAST_HOUR - FIRST_HOUR; h++) {
             lv_obj_t* line = box(column);
             lv_obj_set_size(line, lv_pct(100), 1);
-            lv_obj_set_pos(line, 0, h * HOUR_H);
+            lv_obj_set_pos(line, 0, GRID_TOP + h * HOUR_H);
             setBg(line, th().hairline);
         }
         if (a.valid && d < static_cast<int>(a.week.size())) {
@@ -115,24 +127,33 @@ void buildCalendar(lv_obj_t* parent) {
                 int bottom = std::min(HOUR_H * (LAST_HOUR - FIRST_HOUR), (en - FIRST_HOUR * 60) * HOUR_H / 60);
                 if (bottom <= top) continue;
                 lv_color_t base = hex(e.color);
+                int h = std::max(28, bottom - top - 2);
                 lv_obj_t* ev = col(column, 0);
-                lv_obj_set_size(ev, lv_pct(94), std::max(30, bottom - top - 2));
-                lv_obj_set_pos(ev, 3, top + 1);
+                lv_obj_set_size(ev, lv_pct(94), h);
+                lv_obj_set_pos(ev, 3, GRID_TOP + top + 1);
                 setBg(ev, mix(th().card, base, 60));
                 lv_obj_set_style_radius(ev, 8, 0);
                 lv_obj_set_style_pad_hor(ev, 7, 0);
-                lv_obj_set_style_pad_ver(ev, 4, 0);
+                lv_obj_set_style_pad_ver(ev, 5, 0);
                 lv_obj_set_style_clip_corner(ev, true, 0);
+                // Autant de lignes que la hauteur le permet : jamais de texte coupé.
+                int room = (h - 10) / LINE_H;
+                int titleW = lv_text_get_width(e.title.c_str(), static_cast<uint32_t>(e.title.size()), &fig_s14, 0);
+                bool longTitle = titleW > evTextW;
+                // Titre long sur deux lignes plutôt que coupé ; l'heure vient ensuite s'il reste de la place.
+                int titleLines = std::max(1, std::min({2, room, longTitle ? 2 : 1}));
+                bool showTime = room > titleLines;
+                if (!showTime) lv_obj_set_flex_align(ev, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
                 lv_obj_t* t = label(ev, e.title, &fig_s14, eventText(base));
                 lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
-                lv_obj_set_width(t, lv_pct(100));
-                label(ev, e.start, &fig_m14, eventText(base));
+                lv_obj_set_size(t, lv_pct(100), titleLines * LINE_H);
+                if (showTime) label(ev, e.start, &fig_m14, eventText(base));
             }
         }
         if (d == wdToday) {
             int nowMin = now.tm_hour * 60 + now.tm_min;
             if (nowMin >= FIRST_HOUR * 60 && nowMin < LAST_HOUR * 60) {
-                int y = (nowMin - FIRST_HOUR * 60) * HOUR_H / 60;
+                int y = GRID_TOP + (nowMin - FIRST_HOUR * 60) * HOUR_H / 60;
                 lv_obj_t* nl = box(column);
                 lv_obj_set_size(nl, lv_pct(100), 2);
                 lv_obj_set_pos(nl, 0, y);
@@ -144,21 +165,20 @@ void buildCalendar(lv_obj_t* parent) {
     }
 
     // --- Colonne droite : mini-mois + aujourd'hui
-    lv_obj_t* right = col(body, 14);
-    lv_obj_set_size(right, 380, lv_pct(100));
-
     lv_obj_t* mc = card(right, 24, 18);
     lv_obj_set_width(mc, lv_pct(100));
     std::string mname = util::monthName(now.tm_mon);
     mname[0] = static_cast<char>(mname[0] - 32);
     label(mc, mname, &fig_s18, th().text);
     static int32_t cols[] = {LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_FR(1), LV_GRID_TEMPLATE_LAST};
-    static int32_t rows[] = {22, 36, 36, 36, 36, 36, 36, LV_GRID_TEMPLATE_LAST};
+    // Autant de lignes que de semaines dans le mois (4 à 6) : pas de vide en bas.
+    static int32_t rows4[] = {24, 37, 37, 37, 37, LV_GRID_TEMPLATE_LAST};
+    static int32_t rows5[] = {24, 37, 37, 37, 37, 37, LV_GRID_TEMPLATE_LAST};
+    static int32_t rows6[] = {24, 37, 37, 37, 37, 37, 37, LV_GRID_TEMPLATE_LAST};
     lv_obj_t* mg = box(mc);
     lv_obj_set_size(mg, lv_pct(100), LV_SIZE_CONTENT);
-    lv_obj_set_style_margin_top(mg, 8, 0);
+    lv_obj_set_style_margin_top(mg, 10, 0);
     lv_obj_set_layout(mg, LV_LAYOUT_GRID);
-    lv_obj_set_grid_dsc_array(mg, cols, rows);
     const char* letters[7] = {"L", "M", "M", "J", "V", "S", "D"};
     for (int i = 0; i < 7; i++) {
         lv_obj_t* l = label(mg, letters[i], &fig_s14, th().text3);
@@ -176,24 +196,25 @@ void buildCalendar(lv_obj_t* parent) {
     last.tm_mday = 0;
     mktime(&last);
     int days = last.tm_mday;
+    int weeks = (offset + days + 6) / 7;
+    lv_obj_set_grid_dsc_array(mg, cols, weeks <= 4 ? rows4 : weeks == 5 ? rows5 : rows6);
     for (int d = 1; d <= days; d++) {
         int idx = offset + d - 1;
         int c = idx % 7, r = idx / 7 + 1;
         if (r > 6) break;
-        lv_obj_t* cell = col(mg, 2);
-        lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+        // Cases de taille fixe : le chiffre reste centré, avec ou sans point d'événement.
+        lv_obj_t* cell = box(mg);
+        lv_obj_set_size(cell, 34, 34);
         lv_obj_set_grid_cell(cell, LV_GRID_ALIGN_CENTER, c, 1, LV_GRID_ALIGN_CENTER, r, 1);
         bool isToday = d == now.tm_mday;
         if (isToday) {
-            lv_obj_t* circle = box(cell);
-            lv_obj_set_size(circle, 32, 32);
-            lv_obj_set_style_radius(circle, 16, 0);
-            setBg(circle, color::red());
-            lv_obj_t* n = label(circle, std::to_string(d), &fig_s16, color::white());
-            lv_obj_center(n);
+            lv_obj_set_style_radius(cell, 17, 0);
+            setBg(cell, color::red());
+            lv_obj_center(label(cell, std::to_string(d), &fig_s16, color::white()));
         } else {
-            label(cell, std::to_string(d), &fig_m16, c >= 5 ? th().text2 : th().text);
-            if (std::find(a.monthDays.begin(), a.monthDays.end(), d) != a.monthDays.end()) dot(cell, 4, th().text3);
+            lv_obj_center(label(cell, std::to_string(d), &fig_m16, c >= 5 ? th().text2 : th().text));
+            if (std::find(a.monthDays.begin(), a.monthDays.end(), d) != a.monthDays.end())
+                lv_obj_align(dot(cell, 4, th().text3), LV_ALIGN_BOTTOM_MID, 0, 0);
         }
     }
 

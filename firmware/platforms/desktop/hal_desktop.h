@@ -2,6 +2,7 @@
 // fichiers dans ~/.smart-dashboard-sim pour le stockage.
 #pragma once
 
+#include <mutex>
 #include <string>
 
 #include "hal.h"
@@ -34,7 +35,17 @@ public:
     void syncTime(int64_t epoch) override { (void)epoch; }
     uint32_t millis() override;
 
+    // iPhone simulé : association en ~10 s, touches N (notification) et P (appel).
     hal::PhoneState phone() override;
+    uint32_t phoneRevision() override;
+    void phoneSetEnabled(bool on) override;
+    void phoneStartPairing() override;
+    void phoneCancelPairing() override;
+    void phoneForget() override;
+    void phoneAction(uint32_t uid, bool positive) override;
+    void simulateNotification();
+    void simulateIncomingCall();
+    void simulatePaired();
 
     std::string firmwareVersion() override;
     std::string platformName() override { return "Émulateur PC"; }
@@ -49,10 +60,22 @@ public:
 private:
     std::string path(const std::string& key) const;
     void ensureAudio();
+    void phoneInit();
+    void phoneTick();
+    void phoneSample();
 
     std::string dir_;
     int brightness_ = 60;
     bool muted_ = false;
     uint32_t audioDev_ = 0;
     ToneSynth synth_;
+
+    std::mutex phoneMutex_;
+    hal::PhoneState phone_;
+    bool phoneReady_ = false;
+    uint32_t phoneRev_ = 1;
+    uint32_t pairingStartMs_ = 0;
+    uint32_t callStartMs_ = 0;
+    uint32_t nextUid_ = 100;
+    int nextSample_ = 0;
 };

@@ -78,6 +78,7 @@ void buildLockScreen(lv_obj_t* layer) {
     label(lk, "Verrouillé", &fig_s16, ink2);
     lv_obj_t* date = label(left, "", &fig_s22, ink);
     lv_obj_set_style_pad_top(date, 26, 0);
+    lv_obj_set_style_pad_bottom(date, 6, 0);
     app.registerClock(date, ClockFormat::LongDate);
     app.registerClock(label(left, "", &fig_l176, ink), ClockFormat::HHMM);
 

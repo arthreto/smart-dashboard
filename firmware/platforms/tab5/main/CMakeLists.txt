@@ -14,6 +14,7 @@ idf_component_register(
     "main.cpp"
     "hal_tab5.cpp"
     "rx8130.cpp"
+    "iphone_ble.cpp"
     ${APP_SOURCES}
     ${APP_DIR}/third_party/cjson/cJSON.c
   INCLUDE_DIRS "." ${APP_DIR})

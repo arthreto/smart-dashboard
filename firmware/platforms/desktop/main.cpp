@@ -8,7 +8,8 @@
 //   ./smart_dashboard_sim --live --screenshots out/  → idem avec les données du serveur appairé
 //
 // Raccourcis clavier : B = bouton du boîtier, R = tester une alarme, L = verrouiller,
-//                      S = capture d'écran (fichier .ppm), Échap = fermer les superpositions.
+//                      S = capture d'écran (fichier .ppm), Échap = fermer les superpositions,
+//                      N = notification de l'iPhone simulé, P = appel entrant simulé.
 #include <SDL2/SDL.h>
 
 #include <atomic>
@@ -29,7 +30,8 @@ std::atomic<int> g_key{0};
 int SDLCALL keyWatch(void*, SDL_Event* e) {
     if (e->type == SDL_KEYDOWN && !e->key.repeat) {
         SDL_Keycode k = e->key.keysym.sym;
-        if (k == SDLK_b || k == SDLK_r || k == SDLK_l || k == SDLK_s || k == SDLK_ESCAPE) g_key = static_cast<int>(k);
+        if (k == SDLK_b || k == SDLK_r || k == SDLK_l || k == SDLK_s || k == SDLK_n || k == SDLK_p || k == SDLK_ESCAPE)
+            g_key = static_cast<int>(k);
     }
     return 1;
 }
@@ -102,7 +104,7 @@ int main(int argc, char** argv) {
 
     lv_init();
     lv_display_t* disp = lv_sdl_window_create(1280, 720);
-    lv_sdl_window_set_title(disp, "Smart Dashboard — émulateur Tab5 (B : bouton · R : alarme · L : verrou)");
+    lv_sdl_window_set_title(disp, "Smart Dashboard — émulateur Tab5 (B bouton · R alarme · L verrou · N notification · P appel)");
     lv_indev_t* mouse = lv_sdl_mouse_create();
     lv_indev_t* kb = lv_sdl_keyboard_create();
     (void)mouse;
@@ -123,6 +125,7 @@ int main(int argc, char** argv) {
                      {Screen::Settings, "08-reglages"}, {Screen::Music, "09-musique"}, {Screen::Cinema, "10-cinema"}};
         App::get().debugCloseOverlays();
         if (live) spin(4000);  // première synchronisation avec le serveur
+        platform.simulatePaired();
         for (const Shot& s : shots) {
             App::get().navigate(s.s);
             spin(400);
@@ -151,6 +154,27 @@ int main(int argc, char** argv) {
             spin(400);
             writeFrame(disp, shotsDir + "/" + s.name + ".ppm");
         }
+        App::get().state().settings.theme = "dark";
+        App::get().updateSettings("{}");
+        // iPhone : bandeau de notification, appel entrant, association
+        App::get().navigate(Screen::Home);
+        spin(300);
+        platform.simulateNotification();
+        spin(500);
+        writeFrame(disp, shotsDir + "/14-bandeau-iphone.ppm");
+        platform.simulateIncomingCall();
+        spin(500);
+        writeFrame(disp, shotsDir + "/15-appel-entrant.ppm");
+        App::get().debugCloseOverlays();
+        platform.phoneForget();
+        App::get().navigate(Screen::Phone);
+        spin(400);
+        writeFrame(disp, shotsDir + "/16-iphone-associer.ppm");
+        App::get().ui.phonePairingSinceMs = platform.millis();
+        platform.phoneStartPairing();
+        spin(3600);
+        writeFrame(disp, shotsDir + "/17-iphone-code.ppm");
+        platform.simulatePaired();
         std::printf("Captures écrites dans %s\n", shotsDir.c_str());
         return 0;
     }
@@ -163,6 +187,8 @@ int main(int argc, char** argv) {
         else if (key == SDLK_r) App::get().debugRing();
         else if (key == SDLK_l) App::get().lock();
         else if (key == SDLK_ESCAPE) App::get().debugCloseOverlays();
+        else if (key == SDLK_n) platform.simulateNotification();
+        else if (key == SDLK_p) platform.simulateIncomingCall();
         else if (key == SDLK_s) {
             std::string f = "capture-" + std::to_string(++shot) + ".ppm";
             if (writeFrame(disp, f)) std::printf("Capture enregistrée : %s\n", f.c_str());

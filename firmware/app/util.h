@@ -24,6 +24,8 @@ int minutesOf(const std::string& hhmm);
 bool inWindow(const struct tm& t, const std::string& start, const std::string& end);
 /** « dans 1 h 48 », « dans 25 h 18 min » */
 std::string inDelay(int64_t seconds);
+/** « à l'instant », « il y a 5 min », « 07:10 », « Hier », « Jeu. », « 12/10 » (0 → ""). */
+std::string relativeTime(int64_t epoch);
 /** « 3:58 » */
 std::string mmss(int ms);
 /** Date « 2026-10-17 » → « mer. 21 octobre » */

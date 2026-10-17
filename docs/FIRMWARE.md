@@ -16,12 +16,14 @@ matérielle propre à la tablette (`main/hal_tab5.cpp`).
 | Batterie | INA226 (tension de la batterie 2 cellules), USB-C détecté = en charge |
 | Son des alarmes et clics | codec ES8388 + haut-parleur, sonneries synthétisées (même son que l'émulateur) |
 | Veille profonde | extinction complète ; l'horloge RX8130 rallume la tablette 2 min avant l'alarme suivante (et avant la routine de pré-éclairage) |
+| iPhone : notifications, appels entrants (accepter / refuser) | Bluetooth basse consommation de l'ESP32-C6 (même firmware ESP-Hosted que le Wi-Fi), pile NimBLE sur le P4, service Apple ANCS |
 
 Limites actuelles :
 
-- **iPhone (notifications, appels)** : la page affiche « Bientôt disponible ».
-  Le Bluetooth est porté par l'ESP32-C6 ; la liaison ANCS avec l'iPhone viendra
-  dans une version suivante.
+- **iPhone** : la tablette reçoit les notifications et les appels, et peut accepter,
+  refuser ou effacer. La conversation elle-même reste sur l'iPhone (le Tab5 n'a ni
+  micro ni haut-parleur « mains libres » reliés au Bluetooth classique, que l'ESP32-C6
+  ne gère pas). Pas de réponse aux messages : iOS ne le permet pas aux accessoires.
 - **Sur secteur (USB branché)**, la tablette ne peut pas se couper : à la place de
   la veille profonde, elle reste allumée écran éteint (l'alarme sonne normalement,
   un toucher rallume l'écran).
@@ -120,3 +122,49 @@ Voir `firmware/platforms/tab5/components/THIRD_PARTY.md` : la BSP du Tab5 et la
 version d'`esp_lvgl_port` adaptée par M5Stack sont copiées depuis la démo
 officielle **M5Tab5-UserDemo** (licence Apache-2.0), pour que le projet se
 compile sans étape supplémentaire.
+
+
+## Associer ton iPhone
+
+Le Bluetooth du Tab5 est fourni par la puce **ESP32-C6**, comme le Wi-Fi : son
+firmware d'usine (ESP-Hosted) contient le contrôleur Bluetooth basse consommation.
+Rien à flasher de plus. L'iPhone partage ses notifications grâce au service Apple
+**ANCS**, prévu exactement pour les montres et accessoires.
+
+1. Sur la tablette : page **iPhone** › **Associer un iPhone**. La tablette devient
+   visible pendant 2 minutes.
+2. Sur l'iPhone : **Réglages › Bluetooth**, touche **Smart Dashboard** (rubrique
+   « Autres appareils »).
+3. L'iPhone demande un code : tape le **code à 6 chiffres affiché sur la tablette**.
+4. L'iPhone demande ensuite s'il peut partager ses notifications avec
+   « Smart Dashboard » : choisis **Autoriser**.
+
+C'est tout : l'iPhone se reconnecte tout seul dès qu'il est à portée (une dizaine
+de mètres). Les notifications arrivent en bandeau en haut de l'écran, et un appel
+entrant ouvre l'écran d'appel avec **Refuser** / **Accepter**.
+
+Réglages sur la page iPhone :
+
+| Tuile | Effet |
+|---|---|
+| Bluetooth | coupe complètement la liaison (mémorisé) |
+| Ne pas déranger | plus de bandeau ni de sonnerie ; s'active aussi tout seul pendant le mode nuit |
+| Bandeaux | afficher ou non les bandeaux de notification |
+| Sonnerie appels | faire sonner la tablette pendant un appel entrant |
+
+En cas de souci :
+
+- **Les notifications n'arrivent pas** : sur l'iPhone, Réglages › Bluetooth ›
+  Smart Dashboard › ⓘ › active **« Partager les notifications système »**. Une app
+  dont les notifications sont coupées dans Réglages › Notifications n'envoie rien
+  à la tablette non plus.
+- **« L'iPhone ne reconnaît plus la tablette »** : sur l'iPhone, Réglages ›
+  Bluetooth › Smart Dashboard › ⓘ › **Oublier cet appareil**, puis recommence
+  l'association. Sur la tablette, **Oublier l'iPhone** fait l'inverse.
+- Les messages de la pile Bluetooth sont visibles dans `idf.py monitor` (préfixe
+  `iphone`).
+
+Un seul iPhone est associé à la fois : en associer un nouveau oublie l'ancien.
+Pendant une veille profonde (sur batterie), la tablette est réellement éteinte : ni
+bandeau ni sonnerie d'appel. Au réveil, l'iPhone se reconnecte et la liste des
+notifications se remet à jour.

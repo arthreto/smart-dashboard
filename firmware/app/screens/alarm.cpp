@@ -58,7 +58,8 @@ void buildAlarm(lv_obj_t* parent) {
     icon(hh, ICON_ALARM, &icons_20, lv_color_hex(0xFFB340));
     label(hh, "PROCHAINE ALARME", &fig_s14, lv_color_hex(0xFFB340));
     if (s.nextAlarm.valid) {
-        label(hero, s.nextAlarm.time, &fig_l96, th().text);
+        lv_obj_t* big = label(hero, s.nextAlarm.time, &fig_l96, th().text);
+        lv_obj_set_style_pad_top(big, 6, 0);
         time_t at = static_cast<time_t>(s.nextAlarm.at);
         struct tm t;
         localtime_r(&at, &t);
@@ -97,7 +98,7 @@ void buildAlarm(lv_obj_t* parent) {
     if (!s.routine.enabled) lv_obj_set_style_opa(steps, LV_OPA_40, 0);
     if (s.routine.preLightMinutes > 0)
         routineStep(steps, "–" + std::to_string(s.routine.preLightMinutes) + " min", ICON_SUN, color::yellow(), "L’écran s’éclaire progressivement");
-    routineStep(steps, "Alarme", ICON_VOLUME, color::orange(), "Sonnerie, volume qui monte en 30 s");
+    routineStep(steps, "Alarme", ICON_VOLUME, color::orange(), "Sonnerie qui monte en 30 s");
     if (s.routine.showBriefing) routineStep(steps, "Arrêt", ICON_CALENDAR, color::blue(), "Météo et agenda du jour à l’écran");
     if (s.routine.waterReminder) routineStep(steps, "+5 min", ICON_DROP, color::green(), "Habitude : boire un verre d’eau");
 
@@ -181,6 +182,7 @@ void buildRinging(lv_obj_t* layer, const Alarm& alarm) {
 
     lv_obj_t* lb = label(c, (alarm.label.empty() ? std::string("Alarme") : alarm.label) + " · Bonjour", &fig_s22, ink);
     lv_obj_set_style_pad_top(lb, 18, 0);
+    lv_obj_set_style_pad_bottom(lb, 6, 0);
     App::get().registerClock(label(c, "", &fig_l176, ink), ClockFormat::HHMM);
 
     const State& s = App::get().state();

@@ -22,6 +22,7 @@
 #include <string>
 
 #include "hal.h"
+#include "iphone_ble.h"
 #include "lvgl.h"
 #include "rx8130.h"
 #include "tones.h"
@@ -60,6 +61,15 @@ public:
     void syncTime(int64_t epoch) override;
     uint32_t millis() override;
 
+    // iPhone (Bluetooth basse consommation, notifications et appels via ANCS)
+    hal::PhoneState phone() override { return iphone_.state(); }
+    uint32_t phoneRevision() override { return iphone_.revision(); }
+    void phoneSetEnabled(bool on) override;
+    void phoneStartPairing() override { iphone_.startPairing(); }
+    void phoneCancelPairing() override { iphone_.cancelPairing(); }
+    void phoneForget() override { iphone_.forget(); }
+    void phoneAction(uint32_t uid, bool positive) override { iphone_.action(uid, positive); }
+
     std::string firmwareVersion() override;
     std::string platformName() override { return "M5Stack Tab5"; }
 
@@ -88,6 +98,7 @@ private:
     bool wokeByRtc_ = false;
 
     i2c_master_dev_handle_t ina226_ = nullptr;
+    IphoneLink iphone_;
 
     // Wi-Fi
     esp_netif_t* sta_ = nullptr;

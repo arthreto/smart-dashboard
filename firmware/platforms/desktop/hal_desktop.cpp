@@ -175,26 +175,186 @@ uint32_t DesktopHal::millis() {
     return static_cast<uint32_t>(duration_cast<milliseconds>(steady_clock::now() - start).count());
 }
 
+// ---------------------------------------------------------------- iPhone simulé
+
+namespace {
+int64_t nowEpoch() { return static_cast<int64_t>(time(nullptr)); }
+int64_t todayAt(int h, int m, int daysAgo = 0) {
+    time_t now = time(nullptr);
+    struct tm t;
+    localtime_r(&now, &t);
+    t.tm_mday -= daysAgo;
+    t.tm_hour = h;
+    t.tm_min = m;
+    t.tm_sec = 0;
+    int64_t e = static_cast<int64_t>(mktime(&t));
+    return e > nowEpoch() ? e - 86400 : e;
+}
+}  // namespace
+
+void DesktopHal::phoneInit() {
+    if (phoneReady_) return;
+    phoneReady_ = true;
+    phone_.supported = true;
+    phone_.enabled = load("sim_bt") != "0";
+    phone_.paired = load("sim_iphone") == "1";
+    if (phone_.paired) phoneSample();
+}
+
+void DesktopHal::phoneSample() {
+    phone_.connected = phone_.enabled;
+    phone_.name = "iPhone (simulé)";
+    phone_.battery = 64;
+    phone_.notifications = {
+        {1, "MESSAGES", "Léa", "Je réserve pour 12 h 30, ça te va ?", nowEpoch() - 5 * 60, "Répondre", "Effacer"},
+        {2, "MAIL", "Hébergeur VPS", "Votre facture d’octobre est disponible.", todayAt(7, 10), "", "Effacer"},
+        {3, "RAPPELS", "Récupérer le colis", "Point relais · avant 19:00", todayAt(7, 0), "", "Effacer"},
+        {4, "ACTIVITÉ", "Objectif de pas atteint", "8 412 pas · 6,1 km", todayAt(20, 15, 1), "", "Effacer"},
+    };
+    phone_.calls = {
+        {"Maman", "Appel manqué", todayAt(7, 12), true},
+        {"Léa", "Appel entrant", todayAt(18, 40, 1), false},
+        {"Numéro masqué", "Appel manqué", todayAt(11, 5, 1), true},
+        {"Bureau", "Appel entrant", todayAt(9, 30, 2), false},
+    };
+}
+
+void DesktopHal::phoneTick() {
+    phoneInit();
+    uint32_t now = millis();
+    if (phone_.pairing) {
+        uint32_t elapsed = now - pairingStartMs_;
+        if (elapsed > 3000 && phone_.pairingCode.empty()) {
+            phone_.pairingCode = "482913";  // l'iPhone « demande » le code
+            phoneRev_++;
+        }
+        if (elapsed > 12000) {
+            phone_.pairing = false;
+            phone_.pairingCode.clear();
+            phone_.paired = true;
+            save("sim_iphone", "1");
+            phoneSample();
+            phoneRev_++;
+        }
+    }
+    if (phone_.incomingUid && now - callStartMs_ > 25000) {  // sans réponse : appel manqué
+        phone_.calls.insert(phone_.calls.begin(), {phone_.incomingName, "Appel manqué", nowEpoch(), true});
+        phone_.incomingUid = 0;
+        phone_.incomingName.clear();
+        phoneRev_++;
+    }
+}
+
 hal::PhoneState DesktopHal::phone() {
-    // Données d'exemple : sur la tablette, elles viendront de l'iPhone via Bluetooth (ANCS).
-    hal::PhoneState p;
-    p.supported = true;
-    p.connected = true;
-    p.name = "iPhone (simulé)";
-    p.battery = 64;
-    p.notifications = {
-        {"MESSAGES", "Léa", "Je réserve pour 12 h 30, ça te va ?", "il y a 5 min"},
-        {"MAIL", "Hébergeur VPS", "Votre facture d’octobre est disponible.", "07:10"},
-        {"RAPPELS", "Récupérer le colis", "Point relais · avant 19:00", "07:00"},
-        {"ACTIVITÉ", "Objectif de pas atteint", "8 412 pas · 6,1 km", "Hier"},
+    std::lock_guard<std::mutex> lock(phoneMutex_);
+    phoneTick();
+    hal::PhoneState s = phone_;
+    s.linked = s.connected;
+    return s;
+}
+
+uint32_t DesktopHal::phoneRevision() {
+    std::lock_guard<std::mutex> lock(phoneMutex_);
+    phoneTick();
+    return phoneRev_;
+}
+
+void DesktopHal::phoneSetEnabled(bool on) {
+    std::lock_guard<std::mutex> lock(phoneMutex_);
+    phoneInit();
+    phone_.enabled = on;
+    phone_.connected = on && phone_.paired;
+    if (!on) {
+        phone_.pairing = false;
+        phone_.incomingUid = 0;
+    }
+    save("sim_bt", on ? "1" : "0");
+    phoneRev_++;
+}
+
+void DesktopHal::phoneStartPairing() {
+    std::lock_guard<std::mutex> lock(phoneMutex_);
+    phoneInit();
+    phone_.enabled = true;
+    phone_.pairing = true;
+    phone_.pairingCode.clear();
+    pairingStartMs_ = millis();
+    phoneRev_++;
+}
+
+void DesktopHal::phoneCancelPairing() {
+    std::lock_guard<std::mutex> lock(phoneMutex_);
+    phone_.pairing = false;
+    phone_.pairingCode.clear();
+    phoneRev_++;
+}
+
+void DesktopHal::phoneForget() {
+    std::lock_guard<std::mutex> lock(phoneMutex_);
+    phoneInit();
+    bool enabled = phone_.enabled;
+    phone_ = hal::PhoneState{};
+    phone_.supported = true;
+    phone_.enabled = enabled;
+    save("sim_iphone", "0");
+    phoneRev_++;
+}
+
+void DesktopHal::phoneAction(uint32_t uid, bool positive) {
+    std::lock_guard<std::mutex> lock(phoneMutex_);
+    if (uid && uid == phone_.incomingUid) {
+        phone_.calls.insert(phone_.calls.begin(), {phone_.incomingName, positive ? "Appel accepté" : "Appel refusé", nowEpoch(), false});
+        phone_.incomingUid = 0;
+        phone_.incomingName.clear();
+    } else {
+        auto& v = phone_.notifications;
+        v.erase(std::remove_if(v.begin(), v.end(), [uid](const hal::PhoneNotification& n) { return n.uid == uid; }), v.end());
+    }
+    phoneRev_++;
+}
+
+void DesktopHal::simulateNotification() {
+    std::lock_guard<std::mutex> lock(phoneMutex_);
+    phoneInit();
+    if (!phone_.connected) {
+        std::printf("[iPhone simulé] associe d'abord l'iPhone (page iPhone › Associer)\n");
+        return;
+    }
+    static const hal::PhoneNotification samples[] = {
+        {0, "WHATSAPP", "Maman", "Tu passes dîner ce soir ?", 0, "Répondre", "Effacer"},
+        {0, "MESSAGES", "Léa", "J’arrive dans 10 minutes", 0, "Répondre", "Effacer"},
+        {0, "CALENDRIER", "Révision projet VPS", "Dans 15 minutes · Bureau", 0, "", "Effacer"},
+        {0, "MAIL", "Spotify", "Ta playlist de la semaine est prête", 0, "", "Effacer"},
     };
-    p.calls = {
-        {"Maman", "Appel manqué", "07:12", true},
-        {"Léa", "Entrant · 3 min", "Hier", false},
-        {"Numéro masqué", "Appel manqué", "Hier", true},
-        {"Bureau", "Sortant · 12 min", "Jeu.", false},
-    };
-    return p;
+    hal::PhoneNotification n = samples[nextSample_++ % 4];
+    n.uid = nextUid_++;
+    n.at = nowEpoch();
+    phone_.notifications.insert(phone_.notifications.begin(), n);
+    if (phone_.notifications.size() > 20) phone_.notifications.resize(20);
+    phoneRev_++;
+}
+
+void DesktopHal::simulateIncomingCall() {
+    std::lock_guard<std::mutex> lock(phoneMutex_);
+    phoneInit();
+    if (!phone_.connected) {
+        std::printf("[iPhone simulé] associe d'abord l'iPhone (page iPhone › Associer)\n");
+        return;
+    }
+    phone_.incomingUid = nextUid_++;
+    phone_.incomingName = "Maman";
+    callStartMs_ = millis();
+    phoneRev_++;
+}
+
+void DesktopHal::simulatePaired() {
+    std::lock_guard<std::mutex> lock(phoneMutex_);
+    phoneInit();
+    phone_.enabled = true;
+    phone_.paired = true;
+    phone_.pairing = false;
+    phoneSample();
+    phoneRev_++;
 }
 
 std::string DesktopHal::firmwareVersion() {

@@ -44,6 +44,12 @@ void App::loadConfig() {
 void App::init() {
     api::start();
     loadConfig();
+    {
+        hal::Hal& h = hal::get();
+        phonePrefs_.dnd = h.load("ph_dnd") == "1";
+        phonePrefs_.banners = h.load("ph_banner") != "0";
+        phonePrefs_.ringCalls = h.load("ph_ring") != "0";
+    }
 
     std::string cached = hal::get().load("state_cache");
     if (demo_) applyState(DEMO_STATE_JSON, true);
@@ -98,6 +104,7 @@ void App::loop() {
         int interval = screenOff_ ? OFFLINE_POLL_SECONDS : std::max(15, state_.settings.pollSeconds);
         if (lastPollMs_ == 0 || now - lastPollMs_ >= static_cast<uint32_t>(interval) * 1000u) poll();
     }
+    checkPhone();
     if (dirty_) rebuild();
 }
 
@@ -542,6 +549,7 @@ void App::lock() {
     ui.pin.clear();
     lockLayer_ = fullLayer(lv_layer_top());
     buildLockScreen(lockLayer_);
+    if (callLayer_) lv_obj_move_foreground(callLayer_);
     if (ringLayer_) lv_obj_move_foreground(ringLayer_);
     if (sleepLayer_) lv_obj_move_foreground(sleepLayer_);
     if (tintLayer_) lv_obj_move_foreground(tintLayer_);
@@ -772,4 +780,113 @@ void App::debugCloseOverlays() {
     toast_ = nullptr;
     if (toastTimer_) lv_timer_delete(toastTimer_);
     toastTimer_ = nullptr;
+    if (callLayer_) lv_obj_delete(callLayer_);
+    callLayer_ = nullptr;
+    hidePhoneBanner();
+}
+
+// ---------------------------------------------------------------- iPhone
+
+void App::setPhonePrefs(const PhonePrefs& p) {
+    phonePrefs_ = p;
+    hal::Hal& h = hal::get();
+    h.save("ph_dnd", p.dnd ? "1" : "0");
+    h.save("ph_banner", p.banners ? "1" : "0");
+    h.save("ph_ring", p.ringCalls ? "1" : "0");
+    invalidate();
+}
+
+bool App::phoneQuiet() const {
+    if (phonePrefs_.dnd) return true;
+    const Settings& s = state_.settings;
+    return s.nightEnabled && util::inWindow(util::localNow(), s.nightStart, s.nightEnd);
+}
+
+void App::phoneAction(uint32_t uid, bool positive) {
+    hal::get().phoneAction(uid, positive);
+    if (uid && uid == callUid_) {
+        closeIncomingCall();
+        toast(positive ? "Appel accepté : parle dans ton iPhone" : "Appel refusé");
+    }
+}
+
+// Appelé à chaque tour de boucle : réagit aux changements venus de l'iPhone.
+void App::checkPhone() {
+    hal::Hal& h = hal::get();
+    uint32_t rev = h.phoneRevision();
+    if (rev == phoneRev_) return;
+    phoneRev_ = rev;
+    hal::PhoneState st = h.phone();
+    if (st.connected != phoneConnected_) {
+        phoneConnected_ = st.connected;
+        bannerSeen_.clear();  // l'iPhone renumérote ses notifications à chaque connexion
+    }
+
+    // Appel entrant
+    if (st.incomingUid && st.incomingUid != callUid_) showIncomingCall(st);
+    else if (!st.incomingUid && callUid_) {
+        closeIncomingCall();
+        callUid_ = 0;
+    }
+
+    // Nouvelles notifications : un bandeau pour la plus récente (pas pour celles déjà
+    // présentes sur l'iPhone au moment de la connexion).
+    time_t now = time(nullptr);
+    const hal::PhoneNotification* fresh = nullptr;
+    for (const hal::PhoneNotification& n : st.notifications) {
+        if (std::find(bannerSeen_.begin(), bannerSeen_.end(), n.uid) != bannerSeen_.end()) continue;
+        bannerSeen_.push_back(n.uid);
+        bool recent = n.at > 0 && now - n.at < 180 && n.at - now < 300;
+        if (recent && !fresh) fresh = &n;
+    }
+    if (bannerSeen_.size() > 200) bannerSeen_.erase(bannerSeen_.begin(), bannerSeen_.begin() + 100);
+    if (fresh && phonePrefs_.banners && !phoneQuiet() && !screenOff_ && !callLayer_ && !ringing_ && !setupLayer_ && screen_ != Screen::Phone)
+        showPhoneBanner(*fresh);
+
+    if (screen_ == Screen::Phone) invalidate();
+}
+
+void App::showPhoneBanner(const hal::PhoneNotification& n) {
+    hidePhoneBanner();
+    banner_ = buildPhoneBanner(lv_layer_top(), n, locked_);
+    onClick(banner_, [this] {
+        hidePhoneBanner();
+        if (!locked_) navigate(Screen::Phone);
+    });
+    hal::get().playClick();
+    bannerTimer_ = lv_timer_create([](lv_timer_t*) { App::get().hidePhoneBanner(); }, 5000, nullptr);
+    lv_timer_set_repeat_count(bannerTimer_, 1);
+}
+
+void App::hidePhoneBanner() {
+    if (bannerTimer_) {
+        lv_timer_delete(bannerTimer_);
+        bannerTimer_ = nullptr;
+    }
+    if (banner_) {
+        lv_obj_delete_async(banner_);
+        banner_ = nullptr;
+    }
+}
+
+void App::showIncomingCall(const hal::PhoneState& st) {
+    callUid_ = st.incomingUid;
+    bool quiet = phoneQuiet();
+    hidePhoneBanner();
+    if (!quiet) wake();  // allume l'écran (sauf en mode ne pas déranger / nuit)
+    if (callLayer_) lv_obj_delete(callLayer_);
+    callLayer_ = fullLayer(lv_layer_top());
+    buildIncomingCall(callLayer_, st.incomingUid, st.incomingName.empty() ? "Appel entrant" : st.incomingName, quiet);
+    if (ringLayer_) lv_obj_move_foreground(ringLayer_);
+    if (sleepLayer_) lv_obj_move_foreground(sleepLayer_);
+    if (tintLayer_) lv_obj_move_foreground(tintLayer_);
+    if (phonePrefs_.ringCalls && !quiet && !ringing_) hal::get().playAlarm("pulsation", 55);
+}
+
+void App::closeIncomingCall() {
+    if (callLayer_) {
+        lv_obj_delete_async(callLayer_);
+        callLayer_ = nullptr;
+    }
+    if (!ringing_) hal::get().stopAudio();
 }

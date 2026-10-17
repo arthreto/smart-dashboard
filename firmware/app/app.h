@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 
+#include "hal.h"
 #include "lvgl.h"
 #include "state.h"
 
@@ -39,6 +40,19 @@ public:
     void updateSettings(const std::string& jsonPatch);
     void syncNow();
 
+    // --- iPhone (notifications et appels par Bluetooth) ---
+    struct PhonePrefs {
+        bool dnd = false;        // ne pas déranger (en plus de la plage du mode nuit)
+        bool banners = true;     // bandeau en haut de l'écran pour chaque notification
+        bool ringCalls = true;   // sonnerie de la tablette pour les appels entrants
+    };
+    const PhonePrefs& phonePrefs() const { return phonePrefs_; }
+    void setPhonePrefs(const PhonePrefs& p);
+    /** Vrai si les notifications doivent rester discrètes (ne pas déranger ou mode nuit). */
+    bool phoneQuiet() const;
+    /** Répond / refuse un appel, ou agit sur une notification (action iOS). */
+    void phoneAction(uint32_t uid, bool positive);
+
     // --- Superpositions ---
     void toast(const std::string& text, bool error = false);
     void lock();
@@ -62,6 +76,7 @@ public:
         std::string setupError;
         bool pairing = false;
         std::string pin;
+        uint32_t phonePairingSinceMs = 0;  // début de l'association de l'iPhone
     } ui;
 
     bool demoMode() const { return demo_; }
@@ -93,6 +108,11 @@ private:
     void showMessage(const std::string& text);
     void takeScreenshot();
     void loadConfig();
+    void checkPhone();
+    void showPhoneBanner(const hal::PhoneNotification& n);
+    void hidePhoneBanner();
+    void showIncomingCall(const hal::PhoneState& st);
+    void closeIncomingCall();
 
     State state_;
     Screen screen_ = Screen::Home;
@@ -133,9 +153,20 @@ private:
     lv_obj_t* setupLayer_ = nullptr;
     lv_timer_t* toastTimer_ = nullptr;
 
+    // iPhone
+    PhonePrefs phonePrefs_;
+    uint32_t phoneRev_ = 0;
+    uint32_t callUid_ = 0;            // appel entrant déjà présenté
+    std::vector<uint32_t> bannerSeen_;  // identifiants valables pour une connexion seulement
+    bool phoneConnected_ = false;
+    lv_obj_t* callLayer_ = nullptr;
+    lv_obj_t* banner_ = nullptr;
+    lv_timer_t* bannerTimer_ = nullptr;
+
     friend void buildLockScreen(lv_obj_t*);
     friend void buildRinging(lv_obj_t*, const Alarm&);
     friend void buildSetup(lv_obj_t*);
+    friend void buildIncomingCall(lv_obj_t*, uint32_t, const std::string&, bool);
     friend struct AppAccess;
 };
 
@@ -152,6 +183,9 @@ void buildSettings(lv_obj_t* parent);
 void buildLockScreen(lv_obj_t* layer);
 void buildRinging(lv_obj_t* layer, const Alarm& alarm);
 void buildSetup(lv_obj_t* layer);
+void buildIncomingCall(lv_obj_t* layer, uint32_t uid, const std::string& name, bool quiet);
+/** Bandeau de notification iPhone (posé sur lv_layer_top). */
+lv_obj_t* buildPhoneBanner(lv_obj_t* parent, const hal::PhoneNotification& n, bool hideContent);
 
 /** En-tête de page commun (titre + sous-titre + zone d'actions à droite). Renvoie la zone d'actions. */
 lv_obj_t* pageHeader(lv_obj_t* parent, const std::string& title, const std::string& subtitle);

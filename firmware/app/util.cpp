@@ -111,6 +111,29 @@ std::string inDelay(int64_t seconds) {
     return b;
 }
 
+std::string relativeTime(int64_t epoch) {
+    if (epoch <= 0) return "";
+    time_t now = time(nullptr);
+    int64_t diff = static_cast<int64_t>(now) - epoch;
+    if (diff < 60) return "à l’instant";
+    if (diff < 3600) return "il y a " + std::to_string(diff / 60) + " min";
+    time_t e = static_cast<time_t>(epoch);
+    struct tm t, n;
+    localtime_r(&e, &t);
+    localtime_r(&now, &n);
+    // Différence en jours calendaires (midi pour éviter les changements d'heure).
+    struct tm a = t, b = n;
+    a.tm_hour = b.tm_hour = 12;
+    a.tm_min = b.tm_min = a.tm_sec = b.tm_sec = 0;
+    int days = static_cast<int>((mktime(&b) - mktime(&a) + 43200) / 86400);
+    if (days <= 0) return hhmm(t);
+    if (days == 1) return "Hier";
+    if (days < 7) return weekdayName(t.tm_wday, true).substr(0, 3) + ".";
+    char buf[16];
+    snprintf(buf, sizeof buf, "%02d/%02d", t.tm_mday, t.tm_mon + 1);
+    return buf;
+}
+
 std::string mmss(int ms) {
     if (ms < 0) ms = 0;
     int s = ms / 1000;

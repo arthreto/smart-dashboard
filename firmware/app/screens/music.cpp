@@ -58,10 +58,11 @@ void buildMusic(lv_obj_t* parent) {
     const Track& t = m.hasTrack ? m.track : empty;
     lv_obj_t* cover = art(parent, t, 420, 30);
     // Halo coloré sous la pochette (une ombre noire serait invisible sur le fond sombre).
-    lv_obj_set_style_shadow_width(cover, 80, 0);
-    lv_obj_set_style_shadow_color(cover, artColor(t.album + t.title, 0), 0);
-    lv_obj_set_style_shadow_opa(cover, th().dark ? 70 : 50, 0);
-    lv_obj_set_style_shadow_offset_y(cover, 24, 0);
+    // En thème clair, une ombre neutre et discrète (un halo coloré y paraît grisâtre).
+    lv_obj_set_style_shadow_width(cover, th().dark ? 80 : 44, 0);
+    lv_obj_set_style_shadow_color(cover, th().dark ? artColor(t.album + t.title, 0) : lv_color_hex(0x000000), 0);
+    lv_obj_set_style_shadow_opa(cover, th().dark ? 70 : 40, 0);
+    lv_obj_set_style_shadow_offset_y(cover, th().dark ? 24 : 14, 0);
 
     lv_obj_t* right = col(parent, 0);
     lv_obj_set_flex_grow(right, 1);
@@ -114,8 +115,10 @@ void buildMusic(lv_obj_t* parent) {
     refresh();
     App::get().onSecond(refresh);
 
+    // Commandes sur toute la largeur de la colonne : lecture/pause pile au centre,
+    // aligné avec la barre de progression.
     lv_obj_t* ctrl = row(right, 0);
-    lv_obj_set_size(ctrl, 520, 110);
+    lv_obj_set_size(ctrl, lv_pct(100), 110);
     lv_obj_set_style_pad_top(ctrl, 10, 0);
     lv_obj_set_flex_align(ctrl, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     iconButton(ctrl, ICON_SHUFFLE, 52, th().bg, th().text2, &icons_24);
@@ -126,7 +129,7 @@ void buildMusic(lv_obj_t* parent) {
     iconButton(ctrl, ICON_REPEAT, 52, th().bg, th().text2, &icons_24);
 
     lv_obj_t* vol = row(right, 14);
-    lv_obj_set_size(vol, 520, 44);
+    lv_obj_set_size(vol, lv_pct(100), 44);
     icon(vol, ICON_VOLUME_LOW, &icons_20, th().text2);
     lv_obj_t* slider = lv_slider_create(vol);
     lv_obj_remove_style_all(slider);

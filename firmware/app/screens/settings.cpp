@@ -24,7 +24,10 @@ lv_obj_t* group(lv_obj_t* parent, const char* title) {
 lv_obj_t* settingRow(lv_obj_t* parent, const std::string& title, const std::string& sub, bool first = false) {
     lv_obj_t* r = row(parent, 14);
     lv_obj_set_width(r, lv_pct(100));
-    lv_obj_set_style_min_height(r, 58, 0);
+    // Même marge au-dessus et en dessous : interrupteurs et sélecteurs ne touchent
+    // jamais les séparateurs.
+    lv_obj_set_style_pad_ver(r, 12, 0);
+    lv_obj_set_style_min_height(r, 64, 0);
     if (!first) {
         lv_obj_set_style_border_side(r, LV_BORDER_SIDE_TOP, 0);
         lv_obj_set_style_border_width(r, 1, 0);

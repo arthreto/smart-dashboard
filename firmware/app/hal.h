@@ -31,26 +31,37 @@ struct WifiNetwork {
 };
 
 struct PhoneNotification {
+    uint32_t uid = 0;        // identifiant ANCS de la notification
     std::string app;         // "MESSAGES", "MAIL"…
     std::string title;
     std::string body;
-    std::string time;        // "il y a 5 min", "07:10"
+    int64_t at = 0;          // date de la notification (epoch), 0 si inconnue
+    std::string positiveLabel;  // action proposée par iOS (ex. « Répondre »), vide sinon
+    std::string negativeLabel;  // ex. « Effacer »
 };
 
 struct PhoneCall {
     std::string name;
-    std::string detail;      // "Appel manqué", "Entrant · 3 min"
-    std::string when;
+    std::string detail;      // "Appel manqué", "Appel entrant"
+    int64_t at = 0;
     bool missed = false;
 };
 
 struct PhoneState {
-    bool supported = false;  // pile Bluetooth disponible sur cette plateforme
-    bool connected = false;
+    bool supported = false;  // Bluetooth disponible sur cette plateforme
+    bool enabled = true;     // Bluetooth activé par l'utilisateur
+    bool paired = false;     // un iPhone est associé
+    bool linked = false;     // liaison Bluetooth établie avec l'iPhone associé
+    bool connected = false;  // … et notifications partagées (reçues par la tablette)
+    bool pairing = false;    // mode association en cours
+    std::string pairingCode; // code à saisir sur l'iPhone (vide tant qu'iOS ne l'a pas demandé)
+    std::string status;      // message d'état lisible (erreur, conseil…)
     std::string name;        // "iPhone de …"
     int battery = -1;
-    std::vector<PhoneNotification> notifications;
-    std::vector<PhoneCall> calls;
+    std::vector<PhoneNotification> notifications;  // les plus récentes d'abord
+    std::vector<PhoneCall> calls;                  // les plus récents d'abord
+    uint32_t incomingUid = 0;                      // appel entrant en cours (0 = aucun)
+    std::string incomingName;
 };
 
 class Hal {
@@ -92,8 +103,18 @@ public:
     virtual void syncTime(int64_t epoch) = 0;
     virtual uint32_t millis() = 0;
 
-    // --- Téléphone (Bluetooth ANCS sur la tablette, données d'exemple sur PC) ---
+    // --- Téléphone (Bluetooth ANCS sur la tablette, simulation sur PC) ---
     virtual PhoneState phone() { return {}; }
+    /** Change à chaque évolution de l'état du téléphone (pour rafraîchir l'écran). */
+    virtual uint32_t phoneRevision() { return 0; }
+    virtual void phoneSetEnabled(bool on) { (void)on; }
+    /** Ouvre l'association d'un iPhone pendant 2 minutes. */
+    virtual void phoneStartPairing() {}
+    virtual void phoneCancelPairing() {}
+    /** Oublie l'iPhone associé (il faudra aussi l'oublier dans Réglages › Bluetooth). */
+    virtual void phoneForget() {}
+    /** Action sur une notification : positive (répondre, accepter) ou négative (effacer, refuser). */
+    virtual void phoneAction(uint32_t uid, bool positive) { (void)uid; (void)positive; }
 
     // --- Divers ---
     virtual std::string firmwareVersion() = 0;

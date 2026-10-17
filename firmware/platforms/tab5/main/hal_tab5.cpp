@@ -103,6 +103,13 @@ void Tab5Hal::begin() {
     ESP_LOGI(TAG, "démarrage%s, heure %s", wokeByRtc_ ? " par l'alarme de réveil" : "", timeValid_ ? "valide" : "inconnue");
 
     initWifi();
+    // Le Bluetooth passe par l'ESP32-C6, déjà relié au P4 pour le Wi-Fi.
+    iphone_.begin(loadRaw("bt_on") != "0");
+}
+
+void Tab5Hal::phoneSetEnabled(bool on) {
+    saveRaw("bt_on", on ? "1" : "0");
+    iphone_.setEnabled(on);
 }
 
 lv_display_t* Tab5Hal::startDisplay() {

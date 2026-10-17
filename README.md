@@ -13,7 +13,7 @@ de l'écran).
 | Réveil | alarmes, répétition, routine matinale, sonnerie même après une veille profonde |
 | Musique | lecture Spotify en cours, pochette, commandes, volume, file d'attente |
 | Cinéma | films Pathé à l'affiche près de chez toi (affiches, séances par jour) et sorties à venir |
-| iPhone | notifications et appels (Bluetooth ANCS — prévu dans une prochaine version du firmware) |
+| iPhone | notifications et appels de ton iPhone en Bluetooth (accepter / refuser), bandeaux, ne pas déranger |
 | Statistiques | graphiques de régularité, sport, statistiques du jeu Roblox |
 | Verrouillage | code PIN, widgets discrets |
 | Réglages | thème sombre/clair/auto, luminosité, mode nuit, veille, Wi-Fi, appairage |
@@ -25,6 +25,7 @@ Captures de l'émulateur (données d'exemple) — toutes dans [docs/captures](do
 | ![Accueil](docs/captures/01-accueil.png) | ![Tâches](docs/captures/03-taches.png) |
 | ![Musique](docs/captures/09-musique.png) | ![Cinéma](docs/captures/10-cinema.png) |
 | ![Réveil](docs/captures/05b-alarme.png) | ![Accueil en thème clair](docs/captures/11-accueil-clair.png) |
+| ![iPhone](docs/captures/06-iphone.png) | ![Appel entrant](docs/captures/15-appel-entrant.png) |
 
 ## Architecture
 

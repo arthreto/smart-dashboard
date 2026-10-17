@@ -17,7 +17,9 @@ lv_obj_t* kpi(lv_obj_t* parent, const std::string& title, const std::string& val
     lv_obj_set_flex_align(c, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     label(c, title, &fig_m14, th().text2);
     label(c, value, &fig_b32, th().text);
+    // Pied de hauteur fixe : les chiffres des quatre cartes restent alignés.
     lv_obj_t* r = row(c, 6);
+    lv_obj_set_size(r, lv_pct(100), 20);
     if (showDelta) {
         bool up = delta >= 0;
         icon(r, up ? ICON_TREND_UP : ICON_ARROW_UP, &icons_16, up ? color::green() : color::orange());
@@ -44,9 +46,10 @@ void buildStats(lv_obj_t* parent) {
     kpi(kpis, "Tâches terminées · " + util::monthName(now.tm_mon), std::to_string(st.monthTasks), "vs mois dernier", st.monthDeltaPct, true);
     lv_obj_t* sport = kpi(kpis, "Séances de sport · " + util::monthName(now.tm_mon), std::to_string(st.sportSessions) + " / " + std::to_string(st.sportGoal),
                           "", 0, false);
-    lv_obj_t* sb = progressBar(sport, 0, 6, st.sportGoal ? st.sportSessions * 100 / st.sportGoal : 0, color::orange(), th().track);
+    lv_obj_t* foot = lv_obj_get_child(sport, 2);
+    lv_obj_clean(foot);
+    lv_obj_t* sb = progressBar(foot, 0, 6, st.sportGoal ? st.sportSessions * 100 / st.sportGoal : 0, color::orange(), th().track);
     lv_obj_set_width(sb, lv_pct(100));
-    lv_obj_delete(lv_obj_get_child(sport, 2));
     kpi(kpis, "Série actuelle", std::to_string(s.tasks.streak) + " j", "Record personnel : " + std::to_string(s.tasks.bestStreak) + " j", 0, false);
     kpi(kpis, "Taux de réussite", std::to_string(st.successRate) + " %", "cette semaine", st.successDeltaPts, true);
 

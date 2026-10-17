@@ -87,7 +87,7 @@ void buildCinema(lv_obj_t* parent) {
         lv_obj_t* strip = row(left, 24);
         lv_obj_set_width(strip, lv_pct(100));
         lv_obj_set_style_pad_top(strip, 12, 0);
-        lv_obj_set_style_pad_bottom(strip, 4, 0);
+        lv_obj_set_style_pad_bottom(strip, 20, 0);
         lv_obj_set_style_pad_left(strip, 6, 0);
         lv_obj_add_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_scroll_dir(strip, LV_DIR_HOR);
@@ -121,8 +121,7 @@ void buildCinema(lv_obj_t* parent) {
         const Film& f = c.films[app.ui.cinemaFilm];
         lv_obj_t* sc = card(left, 24, 0);
         lv_obj_set_width(sc, lv_pct(100));
-        lv_obj_set_flex_grow(sc, 1);
-        lv_obj_set_style_margin_top(sc, 16, 0);
+        lv_obj_set_flex_grow(sc, 1);  // (pas de marge ici : LVGL l'ajouterait en débordant en bas)
         lv_obj_set_style_pad_hor(sc, 22, 0);
         lv_obj_set_style_pad_ver(sc, 18, 0);
         lv_obj_set_flex_align(sc, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);

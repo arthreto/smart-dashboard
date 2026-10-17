@@ -59,6 +59,8 @@ Raccourcis clavier dans la fenêtre :
 | **B** | bouton du boîtier (éteindre/rallumer l'écran, couper une alarme) |
 | **R** | faire sonner une alarme de test |
 | **L** | verrouiller (code PIN de démonstration : **1234**) |
+| **N** | simuler une notification de l'iPhone (bandeau en haut de l'écran) |
+| **P** | simuler un appel entrant sur l'iPhone |
 | **S** | capture d'écran (`capture-N.ppm` dans le dossier courant) |
 | **Échap** | fermer les superpositions (verrouillage, alarme, assistant) |
 
@@ -68,8 +70,10 @@ L'émulateur garde ses réglages dans `~/.smart-dashboard-sim` (côté Linux).
 
 - Pas de Wi-Fi à configurer : le PC est déjà connecté.
 - La veille profonde est simulée (un message indique l'heure de réveil prévue).
-- La page iPhone affiche des notifications d'exemple : sur la tablette, la
-  liaison Bluetooth avec l'iPhone arrivera dans une prochaine version du firmware.
+- L'iPhone est simulé : **Associer un iPhone** affiche un code au bout de 3 s et
+  l'association réussit seule 9 s plus tard. Les notifications et les appels sont
+  des exemples (touches **N** et **P**). Sur la tablette, c'est le vrai iPhone, en
+  Bluetooth (voir [FIRMWARE.md](FIRMWARE.md#associer-ton-iphone)).
 - Batterie fictive (78 %).
 
 ## Problèmes fréquents

@@ -1343,7 +1343,7 @@ lv_font_t fig_bd54 = {
     .get_glyph_dsc = lv_font_get_glyph_dsc_fmt_txt,    /*Function pointer to get glyph's data*/
     .get_glyph_bitmap = lv_font_get_bitmap_fmt_txt,    /*Function pointer to get glyph's bitmap*/
     .line_height = 53,          /*The maximum line height required by the font*/
-    .base_line = 12,             /*Baseline measured from the bottom of the line*/
+    .base_line = 7,             /*Baseline measured from the bottom of the line*/
 #if !(LVGL_VERSION_MAJOR == 6 && LVGL_VERSION_MINOR == 0)
     .subpx = LV_FONT_SUBPX_NONE,
 #endif
