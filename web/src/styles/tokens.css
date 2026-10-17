@@ -1,0 +1,77 @@
+/* Design tokens — reprennent les maquettes (thème sombre, Figtree). */
+:root {
+  color-scheme: dark;
+
+  /* Surfaces */
+  --bg: #0b0b0e;
+  --bg-sidebar: #111114;
+  --surface: #16161a;
+  --surface-raised: #18181c;
+  --surface-inset: #1e1e23;
+  --surface-input: #0f0f12;
+  --fill: #26262c;
+  --fill-hover: #2f2f36;
+  --fill-selected: #2c2c33;
+  --nav-active: #1f1f25;
+  --track: #2a2a30;
+  --switch-off: #3a3a41;
+
+  /* Bordures */
+  --border: rgba(255, 255, 255, 0.06);
+  --border-input: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.12);
+  --border-dashed: rgba(255, 255, 255, 0.2);
+
+  /* Texte (contraste ≥ 4.5:1 sur --surface) */
+  --text: #f5f5f7;
+  --text-2: #c7c7cc;
+  --text-3: #a1a1aa;
+  --text-on-accent: #ffffff;
+
+  /* Couleurs système */
+  --accent: #0a84ff;
+  --accent-strong: #0870e0; /* fond des boutons primaires : texte blanc ≥ 4.5:1 */
+  --accent-strong-hover: #0664c9;
+  --accent-text: #5aa9ff;
+  --accent-text-hover: #8cc4ff;
+  --accent-bg: rgba(10, 132, 255, 0.1);
+  --accent-bg-strong: rgba(10, 132, 255, 0.16);
+  --accent-border: rgba(10, 132, 255, 0.28);
+  --accent-soft-text: #d6e6ff;
+
+  --green: #30d158;
+  --green-text: #6ee08e;
+  --green-bg: rgba(48, 209, 88, 0.15);
+
+  --orange: #ff9f0a;
+  --orange-text: #ffb340;
+  --orange-bg: rgba(255, 159, 10, 0.16);
+
+  --red: #ff453a;
+  --red-text: #ff6961;
+  --red-bg: rgba(255, 69, 58, 0.14);
+  --red-border: rgba(255, 69, 58, 0.4);
+
+  --yellow: #ffd60a;
+  --gray-tile: #636369;
+
+  /* Rayons */
+  --radius-card: 20px;
+  --radius-panel: 14px;
+  --radius-ctl: 12px;
+  --radius-sm: 10px;
+  --radius-pill: 999px;
+
+  /* Typo */
+  --font: 'Figtree', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Dimensions */
+  --sidebar-w: 248px;
+  --ctl-h: 44px;
+  --ctl-h-sm: 38px;
+  --content-max: 1120px;
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent-text);
+  --shadow-pop: 0 18px 48px rgba(0, 0, 0, 0.55);
+}

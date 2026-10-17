@@ -1,0 +1,32 @@
+# Service systemd du serveur Smart Dashboard (installé par deploy/install.sh).
+#   sudo systemctl status smart-dashboard
+#   sudo journalctl -u smart-dashboard -f
+[Unit]
+Description=Smart Dashboard (API + console web)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smartdash
+Group=smartdash
+WorkingDirectory=/opt/smart-dashboard/server
+EnvironmentFile=/opt/smart-dashboard/server/.env
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+
+# Durcissement : le service ne peut écrire que dans son dossier de données.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/smart-dashboard
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

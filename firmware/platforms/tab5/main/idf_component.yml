@@ -1,0 +1,8 @@
+## Dépendances téléchargées automatiquement par idf.py (IDF Component Manager).
+## Versions alignées sur la démo officielle M5Tab5-UserDemo, dont le firmware
+## Wi-Fi de l'ESP32-C6 (ESP-Hosted 1.4.x) est préinstallé sur la tablette.
+dependencies:
+  idf: ">=5.4.0,<5.5"
+  lvgl/lvgl: "~9.2.2"
+  espressif/esp_hosted: "1.4.0"
+  espressif/esp_wifi_remote: "0.8.5"

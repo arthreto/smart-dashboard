@@ -1,0 +1,31 @@
+# Dépendances et compilations
+node_modules/
+server/dist/
+web/dist/
+*.tsbuildinfo
+
+# Données et secrets du serveur
+server/data/
+data/
+.env
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Émulateur
+firmware/build/
+firmware/build-*/
+capture-*.ppm
+
+# Firmware ESP-IDF
+firmware/platforms/tab5/build/
+firmware/platforms/tab5/managed_components/
+firmware/platforms/tab5/sdkconfig
+firmware/platforms/tab5/sdkconfig.old
+firmware/platforms/tab5/dependencies.lock
+
+# Divers
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
