@@ -43,13 +43,34 @@ function calName(c: DAVCalendar): string {
   return 'Calendrier';
 }
 
+/** Le mot de passe pour app est souvent recopié avec des espaces ou un retour à la ligne. */
+export function normalizeAppleCredentials(appleId: unknown, appPassword: unknown): { username: string; password: string } {
+  return {
+    username: String(appleId ?? '').trim().toLowerCase(),
+    password: String(appPassword ?? '').replace(/\s+/g, ''),
+  };
+}
+
 async function client(ctx: IntegrationContext) {
-  return createDAVClient({
-    serverUrl: 'https://caldav.icloud.com',
-    credentials: { username: ctx.config.appleId, password: ctx.secrets.appPassword },
-    authMethod: 'Basic',
-    defaultAccountType: 'caldav',
-  });
+  try {
+    return await createDAVClient({
+      serverUrl: 'https://caldav.icloud.com',
+      credentials: normalizeAppleCredentials(ctx.config.appleId, ctx.secrets.appPassword),
+      authMethod: 'Basic',
+      defaultAccountType: 'caldav',
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (/401|Invalid credentials|Unauthorized/i.test(msg)) {
+      throw new ConfigError(
+        'Apple refuse la connexion (401). Vérifie : 1) l’identifiant est l’adresse principale de ton compte Apple ' +
+          '(Réglages de l’iPhone › ton nom, sous la photo) ; 2) le mot de passe est un « mot de passe pour app » ' +
+          '(account.apple.com › Connexion et sécurité), pas ton mot de passe Apple ; 3) il n’a pas été révoqué. ' +
+          'Si ça échoue encore, crée un nouveau mot de passe pour app et colle-le à nouveau.',
+      );
+    }
+    throw e;
+  }
 }
 
 export async function listCalendars(ctx: IntegrationContext): Promise<{ id: string; name: string; color: string }[]> {
