@@ -29,6 +29,15 @@ echo "==> Compilation (première fois : quelques minutes, LVGL est téléchargé
 cmake -S "$HERE" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release >/dev/null
 cmake --build "$BUILD" -j"$(nproc)"
 
+# Sous WSL (Windows) : fenêtre X11 et rendu logiciel, la combinaison la plus fiable
+# (avec l'accélération 3D, la fenêtre peut apparaître dans la barre des tâches mais rester vide).
+if grep -qi microsoft /proc/version 2>/dev/null; then
+  export SDL_VIDEODRIVER="${SDL_VIDEODRIVER:-x11}"
+  export SDL_RENDER_DRIVER="${SDL_RENDER_DRIVER:-software}"
+  export LIBGL_ALWAYS_SOFTWARE=1
+  [ -n "${DISPLAY:-}" ] || export DISPLAY=:0
+fi
+
 echo "==> Lancement de l'émulateur"
 echo "    B : bouton du boîtier · R : tester une alarme · L : verrouiller · S : capture · Échap : fermer"
 exec "$BUILD/smart_dashboard_sim" "$@"

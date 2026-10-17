@@ -105,6 +105,16 @@ int main(int argc, char** argv) {
     lv_init();
     lv_display_t* disp = lv_sdl_window_create(1280, 720);
     lv_sdl_window_set_title(disp, "Smart Dashboard — émulateur Tab5 (B bouton · R alarme · L verrou · N notification · P appel)");
+    // Fenêtre centrée, affichée et mise au premier plan (sous WSL, elle pouvait rester
+    // invisible ou hors de l'écran).
+    for (Uint32 id = 1; id < 8; id++) {
+        if (SDL_Window* w = SDL_GetWindowFromID(id)) {
+            SDL_SetWindowPosition(w, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+            SDL_ShowWindow(w);
+            SDL_RaiseWindow(w);
+            break;
+        }
+    }
     lv_indev_t* mouse = lv_sdl_mouse_create();
     lv_indev_t* kb = lv_sdl_keyboard_create();
     (void)mouse;
