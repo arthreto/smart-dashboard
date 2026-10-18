@@ -123,7 +123,7 @@ export function updateService(db: DB, id: ServiceId, body: { available?: unknown
       if (!f) throw new ConfigError(`Champ inconnu : ${k}`);
       const val = str(v, 120);
       if (k === 'clientId' && val && !/^[A-Za-z0-9]{8,64}$/.test(val)) throw new ConfigError('Client ID invalide.');
-      if (s.config[k] !== val && k === 'clientId') identityChanged = true;
+      if (k === 'clientId' && s.config[k] && s.config[k] !== val) identityChanged = true;
       s.config[k] = val;
     }
   }

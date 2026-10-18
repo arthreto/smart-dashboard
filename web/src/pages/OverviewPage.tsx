@@ -1,28 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, errorMessage } from '../api';
-import { deviceHeadline, useOverview } from '../components/Layout';
-import { Modal, useConfirm } from '../components/Modal';
+import { useOverview } from '../components/Layout';
+import { MessageModal } from '../components/MessageModal';
 import { useToast } from '../components/Toast';
 import { BusyButton, ErrorState, IconTile, LevelText, Skeleton, StatusPill } from '../components/ui';
 import { formatAgo, formatEventTime, formatLongDate, formatTime, plural } from '../format';
 import { useBusy, useDocumentTitle, useNow } from '../hooks';
 import { Icon } from '../icons';
 import { serviceMeta, sourceLabel } from '../services';
-import type { DeviceCommandType, Overview } from '../types';
-
-const SCREENSHOT_URL = '/api/device/screenshot.jpg';
-const POLL_EVERY_MS = 5_000;
-const POLL_ATTEMPTS = 18; // ≈ 90 s : la tablette récupère la commande à sa prochaine synchro
-
-const COMMAND_TOASTS: Record<DeviceCommandType, string> = {
-  wake: 'Réveil de l’écran demandé.',
-  lock: 'Verrouillage demandé.',
-  reboot: 'Redémarrage demandé.',
-  message: 'Message envoyé à l’écran.',
-  reload: 'Rechargement demandé.',
-  screenshot: 'Capture demandée.',
-};
+import type { ActivityEvent, Overview } from '../types';
+import { ScreenRow } from './ScreensPage';
 
 export function OverviewPage() {
   useDocumentTitle('Vue d’ensemble');
@@ -38,7 +26,7 @@ export function OverviewPage() {
       try {
         await api.post('/api/sync');
         setSyncedAt(new Date());
-        toast.success('Synchronisation lancée pour toutes les intégrations actives.');
+        toast.success('Synchronisation lancée pour tous les services actifs.');
         window.setTimeout(() => void overview.reload(), 2_500);
       } catch (err) {
         toast.error(errorMessage(err));
@@ -52,24 +40,18 @@ export function OverviewPage() {
     return () => window.clearTimeout(id);
   }, [syncedAt]);
 
-  const sendCommand = useCallback(
-    async (type: DeviceCommandType, text?: string): Promise<boolean> => {
-      try {
-        await api.post<{ id: number }>('/api/device/commands', text !== undefined ? { type, text } : { type });
-        const online = overview.data?.device.online;
-        toast.success(
-          `${COMMAND_TOASTS[type]} ${online === false ? 'La tablette l’appliquera dès qu’elle sera de nouveau en ligne.' : 'Elle sera appliquée à la prochaine synchro de la tablette.'}`,
-        );
-        return true;
-      } catch (err) {
-        toast.error(errorMessage(err));
-        return false;
-      }
-    },
-    [overview.data?.device.online, toast],
-  );
-
   const data = overview.data;
+  const pairedCount = data?.devices.filter((d) => d.paired).length ?? 0;
+
+  const broadcast = async (text: string) => {
+    try {
+      const res = await api.post<{ screens: number }>('/api/devices/broadcast', { text });
+      toast.success(res.screens > 1 ? `Message envoyé à tes ${res.screens} écrans.` : 'Message envoyé à ton écran.');
+      setMessageOpen(false);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    }
+  };
 
   return (
     <div className="page" style={{ gap: 24 }}>
@@ -79,14 +61,9 @@ export function OverviewPage() {
           <h1 className="page-title">Vue d’ensemble</h1>
         </div>
         <div className="page-actions">
-          <button
-            type="button"
-            className="btn btn-outline"
-            onClick={() => setMessageOpen(true)}
-            disabled={data ? !data.device.paired : true}
-          >
+          <button type="button" className="btn btn-outline" onClick={() => setMessageOpen(true)} disabled={pairedCount === 0}>
             <Icon name="message" size={17} strokeWidth={2.2} />
-            Envoyer un message à l’écran
+            {pairedCount > 1 ? 'Message à tous les écrans' : 'Message à l’écran'}
           </button>
           <BusyButton className="btn btn-primary" busy={syncing} busyLabel="Synchronisation…" icon="sync" onClick={() => void sync()}>
             {syncedAt ? `Synchronisé à ${formatTime(syncedAt)}` : 'Synchroniser maintenant'}
@@ -99,22 +76,57 @@ export function OverviewPage() {
       <StatCards data={data} now={now} />
 
       <div className="grid-2 stretch">
+        <ScreensCard data={data} now={now} />
         <ServicesCard data={data} />
-        <LiveScreenCard data={data} sendCommand={sendCommand} />
       </div>
 
-      <ActivityCard data={data} now={now} />
+      <ActivityCard events={data?.events ?? null} now={now} />
 
       {messageOpen && (
         <MessageModal
+          title={pairedCount > 1 ? 'Message à tous les écrans' : 'Message à l’écran'}
+          hint={pairedCount > 1 ? 'S’affiche en grand sur chaque écran associé' : 'S’affiche en grand sur la tablette'}
           onClose={() => setMessageOpen(false)}
-          onSend={async (text) => {
-            const ok = await sendCommand('message', text);
-            if (ok) setMessageOpen(false);
-          }}
+          onSend={broadcast}
         />
       )}
     </div>
+  );
+}
+
+// ---------- Écrans du foyer ----------
+function ScreensCard({ data, now }: { data: Overview | null; now: number }) {
+  return (
+    <section className="card" aria-labelledby="screens-title">
+      <div className="card-head baseline">
+        <h2 className="card-title" id="screens-title">
+          Mes écrans
+        </h2>
+        <Link to="/ecrans" className="card-link">
+          {data && data.devices.length > 0 ? 'Gérer les écrans' : 'Ajouter un écran'}
+        </Link>
+      </div>
+      {!data ? (
+        <div className="stack" style={{ marginTop: 14, gap: 12 }}>
+          {Array.from({ length: 2 }, (_, i) => (
+            <Skeleton key={i} height={56} radius={12} />
+          ))}
+        </div>
+      ) : data.devices.length === 0 ? (
+        <div className="empty">
+          <strong>Aucun écran associé</strong>
+          <span>
+            Associe ta tablette depuis <Link to="/ecrans">Mes écrans</Link> : un code à 6 chiffres suffit.
+          </span>
+        </div>
+      ) : (
+        <ul className="screen-list" style={{ marginTop: 10 }}>
+          {data.devices.map((d) => (
+            <ScreenRow key={d.id} device={d} now={now} />
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -136,29 +148,36 @@ function StatCards({ data, now }: { data: Overview | null; now: number }) {
     );
   }
 
-  const { device, today, lastSync } = data;
-  const head = deviceHeadline(device);
-  const state = !device.paired ? 'Non associée' : device.online ? 'En ligne' : 'Hors ligne';
-  const deviceFoot: string[] = [];
-  if (device.paired) {
-    if (typeof device.battery === 'number') deviceFoot.push(`${device.battery} %${device.charging ? ' · en charge' : ''}`);
-    if (!device.charging && typeof device.autonomyDays === 'number')
-      deviceFoot.push(`environ ${plural(Math.round(device.autonomyDays), 'jour')} d’autonomie`);
-    if (!device.online && device.lastSeenAt) deviceFoot.push(`vue ${formatAgo(device.lastSeenAt, now)}`);
-  } else {
-    deviceFoot.push('Associe ta tablette dans « Appareil »');
-  }
+  const { devices, today } = data;
+  const paired = devices.filter((d) => d.paired);
+  const online = paired.filter((d) => d.online).length;
+  const tone = paired.length === 0 ? 'warning' : online === paired.length ? 'ok' : online > 0 ? 'warning' : 'off';
+  const screensFoot =
+    devices.length === 0
+      ? 'Ajoute ta tablette dans « Mes écrans »'
+      : paired.length === 0
+        ? 'Aucun écran associé'
+        : online === paired.length
+          ? paired.length > 1
+            ? 'En ligne · tous tes écrans répondent'
+            : 'En ligne · ton écran répond'
+          : `En ligne · ${plural(paired.length - online, 'écran')} hors ligne`;
+  const lastSync = devices
+    .map((d) => d.lastSyncAt)
+    .filter((x): x is string => !!x)
+    .sort()
+    .pop();
   const pct = today.total > 0 ? Math.round((today.done / today.total) * 100) : 0;
 
   return (
     <div className="grid-stats">
-      <section className="card stat-card" aria-label="Tablette">
-        <div className="stat-label">Tablette</div>
+      <section className="card stat-card" aria-label="Écrans">
+        <div className="stat-label">Écrans</div>
         <div className="stat-value">
-          <span className={`dot lg dot-${head.tone}`} aria-hidden="true" />
-          {state}
+          <span className={`dot lg dot-${tone}`} aria-hidden="true" />
+          {paired.length === 0 ? 'Aucun' : `${online} / ${paired.length}`}
         </div>
-        <div className="stat-foot">{deviceFoot.join(' · ') || '—'}</div>
+        <div className="stat-foot">{screensFoot}</div>
       </section>
       <section className="card stat-card" aria-label="Dernière synchronisation">
         <div className="stat-label">Dernière synchronisation</div>
@@ -200,8 +219,8 @@ function ServicesCard({ data }: { data: Overview | null }) {
         <h2 className="card-title" id="services-title">
           État des services
         </h2>
-        <Link to="/integrations" className="card-link">
-          Gérer les intégrations
+        <Link to="/services" className="card-link">
+          Gérer les services
         </Link>
       </div>
       {!data ? (
@@ -213,7 +232,7 @@ function ServicesCard({ data }: { data: Overview | null }) {
       ) : data.services.length === 0 ? (
         <div className="empty">
           <strong>Aucun service</strong>
-          Active une intégration pour la voir apparaître ici.
+          Active un service pour le voir apparaître ici.
         </div>
       ) : (
         <ul className="service-list">
@@ -236,206 +255,36 @@ function ServicesCard({ data }: { data: Overview | null }) {
   );
 }
 
-// ---------- Écran en direct ----------
-function LiveScreenCard({
-  data,
-  sendCommand,
-}: {
-  data: Overview | null;
-  sendCommand: (type: DeviceCommandType) => Promise<boolean>;
-}) {
-  const toast = useToast();
-  const confirm = useConfirm();
-  const now = useNow(5_000);
-  const [stamp, setStamp] = useState(() => Date.now());
-  const [missing, setMissing] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [capturedAt, setCapturedAt] = useState<string | null>(null);
-  const [shownAt, setShownAt] = useState<number | null>(null);
-  const [polling, setPolling] = useState(false);
-  const [pending, setPending] = useState<DeviceCommandType | null>(null);
-  const cancelled = useRef(false);
-
-  useEffect(() => {
-    cancelled.current = false;
-    return () => {
-      cancelled.current = true;
-    };
-  }, []);
-
-  /** Interroge l'en-tête de la capture (HEAD) pour savoir si une nouvelle image est arrivée. */
-  const probe = useCallback(async (): Promise<string | null> => {
-    try {
-      const res = await fetch(SCREENSHOT_URL, { method: 'HEAD', credentials: 'same-origin', cache: 'no-store' });
-      if (res.status === 404) return 'none';
-      if (!res.ok) return null;
-      const lm = res.headers.get('last-modified');
-      if (lm) setCapturedAt(lm);
-      return [res.headers.get('etag'), lm, res.headers.get('content-length')].join('|');
-    } catch {
-      return null;
-    }
-  }, []);
-
-  useEffect(() => {
-    void probe();
-  }, [probe]);
-
-  const paired = data?.device.paired ?? false;
-
-  const reloadImage = () => {
-    setMissing(false);
-    setStamp(Date.now());
-  };
-
-  const requestCapture = async () => {
-    setPending('screenshot');
-    const before = await probe();
-    const ok = await sendCommand('screenshot');
-    setPending(null);
-    if (!ok) return;
-    setPolling(true);
-    for (let i = 0; i < POLL_ATTEMPTS; i++) {
-      await new Promise((r) => window.setTimeout(r, POLL_EVERY_MS));
-      if (cancelled.current) return;
-      const sig = await probe();
-      if (cancelled.current) return;
-      const noHeaders = sig === '||';
-      if (noHeaders) {
-        // Pas d'en-têtes exploitables : on recharge simplement l'image.
-        reloadImage();
-        continue;
-      }
-      if (sig && sig !== 'none' && sig !== before) {
-        reloadImage();
-        setPolling(false);
-        toast.success('Nouvelle capture reçue.');
-        return;
-      }
-    }
-    setPolling(false);
-    if (!cancelled.current) toast.info('Pas encore de nouvelle capture. La tablette est peut-être en veille profonde.');
-  };
-
-  const run = async (type: DeviceCommandType) => {
-    if (type === 'reboot') {
-      const yes = await confirm({
-        title: 'Redémarrer la tablette ?',
-        message: 'L’écran s’éteindra quelques secondes puis se reconnectera tout seul.',
-        confirmLabel: 'Redémarrer',
-        danger: true,
-      });
-      if (!yes) return;
-    }
-    setPending(type);
-    await sendCommand(type);
-    setPending(null);
-  };
-
-  const captureLabel = capturedAt
-    ? `Capture ${formatAgo(capturedAt, now)}`
-    : shownAt && !missing
-      ? `Affichée depuis ${formatTime(shownAt)}`
-      : '';
-
-  return (
-    <section className="card flex-col" aria-labelledby="live-title">
-      <div className="card-head baseline">
-        <h2 className="card-title" id="live-title">
-          Écran en direct
-        </h2>
-        <span className="card-sub" aria-live="polite">
-          {polling ? 'En attente de la tablette…' : captureLabel}
-        </span>
-      </div>
-
-      <div className="screen-frame">
-        {!missing && (
-          <img
-            key={stamp}
-            src={`${SCREENSHOT_URL}?t=${stamp}`}
-            alt="Dernière capture de l’écran de la tablette"
-            onLoad={() => {
-              setLoaded(true);
-              setMissing(false);
-              setShownAt(Date.now());
-            }}
-            onError={() => {
-              setMissing(true);
-              setLoaded(false);
-            }}
-            style={{ opacity: loaded ? 1 : 0 }}
-          />
-        )}
-        {missing && (
-          <div className="screen-empty">
-            <Icon name="camera" size={26} />
-            <strong>Aucune capture pour l’instant</strong>
-            <span>Demande une capture pour voir ce qu’affiche la tablette.</span>
-          </div>
-        )}
-        {!missing && !loaded && (
-          <div className="screen-empty">
-            <span className="spinner" aria-hidden="true" />
-          </div>
-        )}
-        {polling && (
-          <div className="screen-overlay" role="status">
-            <span className="spinner" aria-hidden="true" />
-            Capture en cours…
-          </div>
-        )}
-      </div>
-
-      <button
-        type="button"
-        className="btn btn-outline"
-        onClick={() => void requestCapture()}
-        disabled={!paired || polling || pending !== null}
-      >
-        {pending === 'screenshot' || polling ? <span className="spinner" aria-hidden="true" /> : <Icon name="camera" size={17} />}
-        Actualiser la capture
-      </button>
-      <div className="row-wrap">
-        <BusyButton className="btn btn-grow" busy={pending === 'wake'} disabled={!paired || pending !== null} onClick={() => void run('wake')}>
-          Réveiller l’écran
-        </BusyButton>
-        <BusyButton className="btn btn-grow" busy={pending === 'lock'} disabled={!paired || pending !== null} onClick={() => void run('lock')}>
-          Verrouiller
-        </BusyButton>
-        <BusyButton className="btn btn-grow" busy={pending === 'reboot'} disabled={!paired || pending !== null} onClick={() => void run('reboot')}>
-          Redémarrer
-        </BusyButton>
-      </div>
-      {data && !paired && (
-        <p className="small muted">
-          Aucune tablette associée. <Link to="/appareil">Associer une tablette</Link>
-        </p>
-      )}
-    </section>
-  );
-}
-
 // ---------- Journal d'activité ----------
-function ActivityCard({ data, now }: { data: Overview | null; now: number }) {
+export function ActivityCard({
+  events,
+  now,
+  title = 'Journal d’activité',
+  emptyText = 'Les synchronisations et actions apparaîtront ici.',
+}: {
+  events: ActivityEvent[] | null;
+  now: number;
+  title?: string;
+  emptyText?: string;
+}) {
   return (
     <section className="card" aria-labelledby="activity-title">
       <div className="card-head baseline" style={{ marginBottom: 8 }}>
         <h2 className="card-title" id="activity-title">
-          Journal d’activité
+          {title}
         </h2>
         <span className="card-sub">Derniers événements</span>
       </div>
-      {!data ? (
+      {!events ? (
         <div className="stack" style={{ gap: 10 }}>
           {Array.from({ length: 5 }, (_, i) => (
             <Skeleton key={i} height={36} radius={8} />
           ))}
         </div>
-      ) : data.events.length === 0 ? (
+      ) : events.length === 0 ? (
         <div className="empty">
           <strong>Rien à signaler</strong>
-          Les synchronisations et actions apparaîtront ici.
+          {emptyText}
         </div>
       ) : (
         <div className="table-scroll">
@@ -449,7 +298,7 @@ function ActivityCard({ data, now }: { data: Overview | null; now: number }) {
               </tr>
             </thead>
             <tbody>
-              {data.events.map((e) => (
+              {events.map((e) => (
                 <tr key={e.id}>
                   <td className="tabular">
                     <time dateTime={e.ts}>{formatEventTime(e.ts, new Date(now))}</time>
@@ -466,55 +315,5 @@ function ActivityCard({ data, now }: { data: Overview | null; now: number }) {
         </div>
       )}
     </section>
-  );
-}
-
-// ---------- Modale « message à l'écran » ----------
-const MESSAGE_MAX = 140;
-
-function MessageModal({ onClose, onSend }: { onClose: () => void; onSend: (text: string) => Promise<void> }) {
-  const [text, setText] = useState('');
-  const [busy, setBusy] = useState(false);
-  const trimmed = text.trim();
-  return (
-    <Modal title="Envoyer un message à l’écran" onClose={onClose} busy={busy}>
-      <form
-        className="stack"
-        onSubmit={async (e) => {
-          e.preventDefault();
-          if (!trimmed) return;
-          setBusy(true);
-          await onSend(trimmed);
-          setBusy(false);
-        }}
-      >
-        <div className="field">
-          <label className="field-label" htmlFor="screen-message">
-            Message
-          </label>
-          <textarea
-            id="screen-message"
-            className="input textarea"
-            rows={3}
-            maxLength={MESSAGE_MAX}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="À table !"
-            aria-describedby="screen-message-count"
-          />
-          <span className="field-hint" id="screen-message-count">
-            S’affiche en grand sur la tablette · {text.length}/{MESSAGE_MAX}
-          </span>
-        </div>
-        <div className="modal-actions">
-          <button type="button" className="btn btn-outline" onClick={onClose} disabled={busy}>
-            Annuler
-          </button>
-          <BusyButton type="submit" className="btn btn-primary" busy={busy} disabled={!trimmed} icon="message">
-            Envoyer
-          </BusyButton>
-        </div>
-      </form>
-    </Modal>
   );
 }

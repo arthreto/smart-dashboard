@@ -39,9 +39,12 @@ export function importBackup(db: DB, data: unknown, deviceIds: Set<number> = new
     const ia = db.prepare(
       'INSERT INTO alarms (id, time, label, days, sound, enabled, snooze_minutes, created_at, device_id) VALUES (@id, @time, @label, @days, @sound, @enabled, @snooze_minutes, @created_at, @device_id)',
     );
+    // Réveil d'un écran inconnu ici (sauvegarde d'un autre serveur) : rattaché au premier écran
+    // du foyer, ou adopté par le prochain écran associé s'il n'y en a encore aucun.
+    const fallback = deviceIds.size ? Math.min(...deviceIds) : null;
     for (const a of arr('alarms')) {
       const dev = Number(a.device_id);
-      ia.run({ ...a, device_id: Number.isInteger(dev) && deviceIds.has(dev) ? dev : null });
+      ia.run({ ...a, device_id: Number.isInteger(dev) && deviceIds.has(dev) ? dev : fallback });
     }
     const is = db.prepare('INSERT INTO settings (key, value) VALUES (@key, @value) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
     for (const s of arr('settings')) if (s.key !== 'pin') is.run(s);

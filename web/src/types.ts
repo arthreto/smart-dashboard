@@ -4,10 +4,29 @@
 export type WeekDays = [boolean, boolean, boolean, boolean, boolean, boolean, boolean];
 
 // ---------- Authentification ----------
+export type Role = 'admin' | 'user';
+
+export interface PublicUser {
+  id: number;
+  login: string;
+  name: string;
+  role: Role;
+  totpEnabled: boolean;
+  household: { id: number; name: string };
+}
+
 export interface AuthStatus {
   setupRequired: boolean;
   authenticated: boolean;
-  totpEnabled: boolean;
+  user: PublicUser | null;
+}
+
+export interface InviteInfo {
+  valid: boolean;
+  kind?: 'invite' | 'reset';
+  expiresAt?: string;
+  note?: string;
+  login?: string | null;
 }
 
 export interface TotpSetup {
@@ -29,17 +48,21 @@ export interface Ok {
 }
 
 // ---------- Vue d'ensemble ----------
-export interface OverviewDevice {
+/** Résumé d'un écran du foyer. */
+export interface DeviceSummary {
+  id: number;
+  name: string;
   paired: boolean;
   online: boolean;
-  name?: string;
-  lastSeenAt?: string | null;
-  battery?: number | null;
-  charging?: boolean;
   firmware?: string | null;
+  lastSeenAt?: string | null;
+  lastSyncAt?: string | null;
+  battery?: number | null;
+  charging?: boolean | null;
   rssi?: number | null;
   ip?: string | null;
   autonomyDays?: number | null;
+  pairedAt?: string | null;
 }
 
 export type ServiceStatus = 'ok' | 'warning' | 'error' | 'disabled' | 'local';
@@ -69,8 +92,7 @@ export interface TodaySummary {
 }
 
 export interface Overview {
-  device: OverviewDevice;
-  lastSync: string | null;
+  devices: DeviceSummary[];
   today: TodaySummary;
   services: ServiceState[];
   events: ActivityEvent[];
@@ -152,6 +174,7 @@ export type AlarmSound = 'aube' | 'carillon' | 'pulsation' | 'douce';
 
 export interface Alarm {
   id: number;
+  deviceId?: number | null;
   time: string;
   label: string;
   days: WeekDays;
@@ -160,7 +183,7 @@ export interface Alarm {
   snoozeMinutes: number;
 }
 
-export type AlarmInput = Omit<Alarm, 'id'>;
+export type AlarmInput = Omit<Alarm, 'id' | 'deviceId'>;
 
 export interface Routine {
   enabled: boolean;
@@ -204,16 +227,7 @@ export interface AvailableWidget {
   label: string;
 }
 
-export interface DeviceInfo {
-  paired: boolean;
-  name?: string | null;
-  firmware?: string | null;
-  lastSeenAt?: string | null;
-  battery?: number | null;
-  charging?: boolean;
-  online: boolean;
-  rssi?: number | null;
-  ip?: string | null;
+export interface DeviceInfo extends DeviceSummary {
   pinSet: boolean;
   pinUpdatedAt?: string | null;
   settings: DeviceSettings;
@@ -301,4 +315,63 @@ export interface ICloudCalendar {
   id: string;
   name: string;
   color?: string;
+}
+
+// ---------- Administration ----------
+export interface AdminUser {
+  id: number;
+  login: string;
+  name: string;
+  role: Role;
+  disabled: boolean;
+  totpEnabled: boolean;
+  createdAt: string;
+  lastLoginAt: string | null;
+  household: { id: number; name: string };
+  devices: number;
+  devicesOnline: number;
+}
+
+export interface AdminInvite {
+  id: number;
+  note: string;
+  createdAt: string;
+  expiresAt: string;
+  usedAt: string | null;
+  usedBy: string | null;
+  status: 'pending' | 'used' | 'expired';
+}
+
+export interface AdminServiceField {
+  key: string;
+  label: string;
+  type: 'text' | 'secret' | 'readonly';
+  mono?: boolean;
+  copyable?: boolean;
+  placeholder?: string;
+}
+
+export interface AdminService {
+  id: string;
+  name: string;
+  description: string;
+  help: string;
+  available: boolean;
+  configured: boolean;
+  missing: string | null;
+  fields: AdminServiceField[];
+  config: Record<string, string>;
+  secrets: Record<string, SecretState>;
+}
+
+export interface AdminOverview {
+  users: number;
+  disabledUsers: number;
+  households: number;
+  devices: number;
+  devicesOnline: number;
+  pendingInvites: number;
+  services: { id: string; name: string; available: boolean; configured: boolean }[];
+  publicUrl: string;
+  events: ActivityEvent[];
 }

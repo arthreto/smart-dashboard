@@ -112,8 +112,11 @@ export function SecretField({
   draft,
   onDraft,
   id,
+  revealPath,
 }: {
   integrationId: string;
+  /** Route qui renvoie la valeur en clair (par défaut : intégration du foyer). */
+  revealPath?: string;
   field: IntegrationField;
   state: SecretState | undefined;
   draft: string | null | undefined;
@@ -140,7 +143,7 @@ export function SecretField({
     setLoading(true);
     try {
       const res = await api.get<{ value: string }>(
-        `/api/integrations/${encodeURIComponent(integrationId)}/secret/${encodeURIComponent(field.key)}`,
+        revealPath ?? `/api/integrations/${encodeURIComponent(integrationId)}/secret/${encodeURIComponent(field.key)}`,
       );
       setRevealed(res.value ?? '');
     } catch (err) {

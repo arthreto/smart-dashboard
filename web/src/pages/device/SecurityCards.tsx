@@ -12,7 +12,8 @@ import type { SettingsSaver } from './useSettingsSaver';
 
 const LOCK_AFTER = [1, 2, 5, 10, 15, 30, 60];
 
-export function SecurityCard({
+/** Verrouillage d'un écran : code PIN (commun au foyer) et verrouillage au réveil (propre à l'écran). */
+export function ScreenLockCard({
   device,
   saver,
   onPinSaved,
@@ -21,22 +22,24 @@ export function SecurityCard({
   saver: SettingsSaver;
   onPinSaved: () => void;
 }) {
-  const { status } = useAuth();
   const now = useNow(60_000);
   const [pinOpen, setPinOpen] = useState(false);
-  const [passwordOpen, setPasswordOpen] = useState(false);
   const s = device.settings;
   const lockOptions = Array.from(new Set([...LOCK_AFTER, s.lockAfterMinutes])).sort((a, b) => a - b);
 
   return (
-    <section className="card" aria-labelledby="security-title">
-      <h2 className="card-title" id="security-title" style={{ marginBottom: 6 }}>
-        Sécurité
+    <section className="card" aria-labelledby="lock-title">
+      <h2 className="card-title" id="lock-title" style={{ marginBottom: 6 }}>
+        Verrouillage
       </h2>
 
       <SettingRow
-        label="Code PIN de l’écran"
-        sub={device.pinSet ? (device.pinUpdatedAt ? `Modifié ${formatAgo(device.pinUpdatedAt, now)}` : 'Défini') : 'Aucun code défini'}
+        label="Code PIN des écrans"
+        sub={
+          device.pinSet
+            ? `${device.pinUpdatedAt ? `Modifié ${formatAgo(device.pinUpdatedAt, now)}` : 'Défini'} · commun à tous tes écrans`
+            : 'Aucun code défini · commun à tous tes écrans'
+        }
       >
         <button type="button" className="btn btn-sm" onClick={() => setPinOpen(true)}>
           {device.pinSet ? 'Modifier' : 'Définir'}
@@ -44,13 +47,13 @@ export function SecurityCard({
       </SettingRow>
 
       <SettingRow
-        label="Verrouiller au réveil de l’écran"
+        label="Verrouiller au réveil de cet écran"
         sub={s.lockOnWake ? `Code demandé après ${s.lockAfterMinutes} min d’inactivité` : 'L’écran s’ouvre sans code'}
       >
         <Switch
           checked={s.lockOnWake}
           onChange={(v) => saver.update({ lockOnWake: v }, { immediate: true })}
-          label="Verrouiller au réveil de l’écran"
+          label="Verrouiller au réveil de cet écran"
           disabled={!device.pinSet && !s.lockOnWake}
         />
       </SettingRow>
@@ -72,16 +75,6 @@ export function SecurityCard({
         </SettingRow>
       )}
 
-      <TotpBlock enabled={Boolean(status?.totpEnabled)} />
-
-      <SettingRow label="Mot de passe de la console">
-        <button type="button" className="btn btn-sm" onClick={() => setPasswordOpen(true)}>
-          Changer
-        </button>
-      </SettingRow>
-
-      <SessionsBlock />
-
       {pinOpen && (
         <PinModal
           onClose={() => setPinOpen(false)}
@@ -91,6 +84,31 @@ export function SecurityCard({
           }}
         />
       )}
+    </section>
+  );
+}
+
+/** Sécurité du compte : double authentification, mot de passe, sessions ouvertes. */
+export function AccountSecurityCard() {
+  const { status } = useAuth();
+  const [passwordOpen, setPasswordOpen] = useState(false);
+
+  return (
+    <section className="card" aria-labelledby="security-title">
+      <h2 className="card-title" id="security-title" style={{ marginBottom: 6 }}>
+        Sécurité du compte
+      </h2>
+
+      <TotpBlock enabled={Boolean(status?.user?.totpEnabled)} />
+
+      <SettingRow label="Mot de passe">
+        <button type="button" className="btn btn-sm" onClick={() => setPasswordOpen(true)}>
+          Changer
+        </button>
+      </SettingRow>
+
+      <SessionsBlock />
+
       {passwordOpen && <PasswordModal onClose={() => setPasswordOpen(false)} />}
     </section>
   );
@@ -117,8 +135,8 @@ function PinModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => vo
     setBusy(true);
     setError(null);
     try {
-      await api.put('/api/device/pin', { pin });
-      toast.success('Code PIN mis à jour. La tablette l’utilisera dès sa prochaine synchro.');
+      await api.put('/api/pin', { pin });
+      toast.success('Code PIN mis à jour. Tes écrans l’utiliseront dès leur prochaine synchro.');
       onSaved();
     } catch (err) {
       setError(errorMessage(err));
@@ -129,9 +147,9 @@ function PinModal({ onClose, onSaved }: { onClose: () => void; onSaved: () => vo
   const digits = (v: string) => v.replace(/\D/g, '').slice(0, 6);
 
   return (
-    <Modal title="Code PIN de l’écran" onClose={onClose} busy={busy}>
+    <Modal title="Code PIN des écrans" onClose={onClose} busy={busy}>
       <form className="stack" onSubmit={submit} noValidate>
-        <p className="modal-text">Ce code déverrouille la tablette. Choisis 4 à 6 chiffres.</p>
+        <p className="modal-text">Ce code déverrouille tous les écrans de ton foyer. Choisis 4 à 6 chiffres.</p>
         <div className="form-grid">
           <Field label="Nouveau code" htmlFor="pin-new">
             <input
@@ -315,7 +333,7 @@ function TotpBlock({ enabled }: { enabled: boolean }) {
   return (
     <>
       <SettingRow
-        label="Double authentification de la console"
+        label="Double authentification"
         sub={enabled ? 'Code à usage unique à chaque connexion' : 'Ajoute un code à usage unique à la connexion'}
       >
         {enabled ? (

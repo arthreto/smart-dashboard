@@ -91,7 +91,7 @@ export function LayoutCard({ device, onSaved }: { device: DeviceInfo; onSaved: (
     if (invalid) return;
     setBusy(true);
     try {
-      await api.put('/api/device/layout', { widgets: items });
+      await api.put(`/api/devices/${device.id}/layout`, { widgets: items });
       onSaved(items);
       toast.success('Disposition envoyée à l’écran.');
     } catch (err) {
@@ -112,7 +112,7 @@ export function LayoutCard({ device, onSaved }: { device: DeviceInfo; onSaved: (
         <span className="card-sub">Sélectionne ou glisse une tuile</span>
       </div>
 
-      <div className="layout-preview" role="list" aria-label={`Accueil de la tablette : ${COLS} colonnes, ${ROWS} rangées`}>
+      <div className="layout-preview" role="list" aria-label={`Accueil de l’écran : ${COLS} colonnes, ${ROWS} rangées`}>
         {items.length === 0 && <div className="layout-empty">Accueil vide : ajoute des widgets ci-dessous.</div>}
         {items.map((it, i) => (
           <div

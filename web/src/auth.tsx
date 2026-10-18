@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api, errorMessage, request, setUnauthorizedHandler } from './api';
-import type { AuthStatus, Ok } from './types';
+import type { AuthStatus, Ok, PublicUser } from './types';
 
 interface AuthContextValue {
   status: AuthStatus | null;
@@ -8,6 +8,7 @@ interface AuthContextValue {
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
   setTotpEnabled: (enabled: boolean) => void;
+  setUser: (user: PublicUser) => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -44,16 +45,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       /* même en cas d'erreur réseau, on quitte la session côté interface */
     }
-    setStatus((s) => (s ? { ...s, authenticated: false } : s));
+    setStatus((s) => (s ? { ...s, authenticated: false, user: null } : s));
   }, []);
 
   const setTotpEnabled = useCallback((enabled: boolean) => {
-    setStatus((s) => (s ? { ...s, totpEnabled: enabled } : s));
+    setStatus((s) => (s && s.user ? { ...s, user: { ...s.user, totpEnabled: enabled } } : s));
+  }, []);
+
+  const setUser = useCallback((user: PublicUser) => {
+    setStatus((s) => (s ? { ...s, user } : s));
   }, []);
 
   const value = useMemo(
-    () => ({ status, error, refresh, logout, setTotpEnabled }),
-    [status, error, refresh, logout, setTotpEnabled],
+    () => ({ status, error, refresh, logout, setTotpEnabled, setUser }),
+    [status, error, refresh, logout, setTotpEnabled, setUser],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

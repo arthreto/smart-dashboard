@@ -45,7 +45,7 @@ export function BackupCard({ onRestored }: { onRestored: () => void }) {
       title: 'Restaurer cette sauvegarde ?',
       message: (
         <>
-          Les habitudes, réveils, réglages et la disposition actuels seront <strong>remplacés</strong> par ceux de « {file.name} ».
+          Les habitudes, l’historique, les réveils et les réglages du foyer seront <strong>remplacés</strong> par ceux de « {file.name} ».
           Les clés API et mots de passe ne sont pas concernés.
         </>
       ),

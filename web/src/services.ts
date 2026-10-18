@@ -32,8 +32,8 @@ const SOURCE_LABELS: Record<string, string> = {
   vps: 'VPS',
   server: 'VPS',
   system: 'Système',
-  device: 'Tablette',
-  tablet: 'Tablette',
+  device: 'Écran',
+  tablet: 'Écran',
   habits: 'Habitudes',
   auth: 'Connexion',
   console: 'Console',
@@ -44,6 +44,7 @@ const SOURCE_LABELS: Record<string, string> = {
   weather: 'Météo',
   alarms: 'Réveils',
   backup: 'Sauvegarde',
+  admin: 'Administration',
 };
 
 export function sourceLabel(source: string): string {

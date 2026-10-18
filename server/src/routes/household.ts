@@ -18,6 +18,7 @@ import {
 } from '../habits.js';
 import { createAlarm, deleteAlarm, getAlarm, getRoutine, listAlarms, saveRoutine, updateAlarm } from '../alarms.js';
 import {
+  broadcastMessage,
   createPairingCode,
   deviceInfo,
   deviceSummary,
@@ -161,6 +162,17 @@ export function householdRoutes(app: FastifyInstance, mainDb: DB): void {
   app.post('/api/devices/pairing-code', auth, async (req) => {
     const { name, deviceId } = (req.body ?? {}) as Body;
     return createPairingCode(hid(req), { name, deviceId: deviceId === undefined || deviceId === null ? undefined : Number(deviceId) });
+  });
+
+  /** Message affiché sur tous les écrans associés du foyer. */
+  app.post('/api/devices/broadcast', auth, async (req) => {
+    const { text } = (req.body ?? {}) as Body;
+    if (typeof text !== 'string' || !text.trim() || text.length > 140) throw new ValidationError('Le message doit faire entre 1 et 140 caractères.');
+    const paired = listDevices(hid(req)).filter((d) => d.token_hash);
+    if (paired.length === 0) throw new ValidationError('Aucun écran associé.');
+    broadcastMessage(hdb(req), hid(req), text.trim());
+    logEvent(hdb(req), 'console', 'info', `Message envoyé à tous les écrans : « ${text.trim()} »`);
+    return { ok: true, screens: paired.length };
   });
 
   app.get('/api/devices/:id', auth, async (req) => deviceInfo(screen(req), hdb(req)));

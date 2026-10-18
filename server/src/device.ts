@@ -302,7 +302,7 @@ export function pairDevice(code: unknown, name: unknown, firmware: unknown): { t
   } else {
     const count = listDevices(row.household_id).length;
     const deviceName =
-      row.name || (typeof name === 'string' && name.trim() && name.trim() !== 'Tab5' ? name.trim().slice(0, 40) : count ? `Écran ${count + 1}` : 'Tab5');
+      row.name || (typeof name === 'string' && name.trim() && name.trim() !== 'Tab5' ? name.trim().slice(0, 40) : `Écran ${count + 1}`);
     // Les réglages d'affichage et la disposition du foyer servent de modèle au nouvel écran.
     const display = JSON.stringify(mergeDisplay(getSetting<Partial<DisplaySettings>>(db, 'display', {})));
     const layout = getSetting<Widget[] | null>(db, 'layout', null);
@@ -415,7 +415,7 @@ export function queueCommand(db: DB, d: DeviceRow, type: unknown, text: unknown)
 export function broadcastMessage(db: DB, householdId: number, text: string): void {
   const ins = db.prepare('INSERT INTO commands (type, text, created_at, device_id) VALUES (?, ?, ?, ?)');
   const now = new Date().toISOString();
-  for (const d of listDevices(householdId)) ins.run('message', text, now, d.id);
+  for (const d of listDevices(householdId)) if (d.token_hash) ins.run('message', text, now, d.id);
 }
 
 function pendingCommands(db: DB, deviceId: number) {

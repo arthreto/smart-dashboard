@@ -191,7 +191,7 @@ export const icloud: IntegrationDef = {
         { value: '60', label: 'Toutes les heures' },
       ],
     },
-    { key: 'calendarNames', label: 'Calendriers affichés', type: 'chips' },
+    { key: 'calendarNames', label: 'Calendriers choisis', type: 'chips' },
   ],
   actions: () => [{ id: 'calendars', label: 'Choisir les calendriers' }],
   missing: (ctx) => (ctx.config.appleId && ctx.secrets.appPassword ? null : 'Renseigne ton identifiant Apple et un mot de passe pour app.'),

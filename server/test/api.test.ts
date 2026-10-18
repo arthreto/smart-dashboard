@@ -124,7 +124,7 @@ test('premier écran : appairage, réveils repris, état complet', async () => {
   res = await app.inject({ method: 'GET', url: '/api/v1/state', headers: bearer(tok1) });
   assert.equal(res.statusCode, 200);
   const state = res.json();
-  assert.equal(state.device.name, 'Tab5');
+  assert.equal(state.device.name, 'Écran 1');
   assert.equal(state.layout.length, 6);
   assert.equal(state.alarms.length, 4, 'les réveils d’exemple du foyer reviennent au premier écran');
   assert.equal(state.weather, null);
@@ -209,6 +209,17 @@ test('code PIN commun et commandes par écran', async () => {
   await app.inject({ method: 'POST', url: '/api/v1/heartbeat', headers: bearer(tok1), payload: { ackCommands: [id] } });
   res = await app.inject({ method: 'GET', url: '/api/v1/state', headers: bearer(tok1) });
   assert.ok(!res.json().commands.some((c: { id: number }) => c.id === id));
+
+  // Message à tous les écrans du foyer.
+  res = await app.inject({ method: 'POST', url: '/api/devices/broadcast', headers: { cookie: admin, ...H }, payload: { text: '' } });
+  assert.equal(res.statusCode, 400);
+  res = await app.inject({ method: 'POST', url: '/api/devices/broadcast', headers: { cookie: admin, ...H }, payload: { text: 'Bonne nuit' } });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.json().screens, 2);
+  for (const tok of [tok1, tok2]) {
+    res = await app.inject({ method: 'GET', url: '/api/v1/state', headers: bearer(tok) });
+    assert.ok(res.json().commands.some((c: { type: string; text: string }) => c.type === 'message' && c.text === 'Bonne nuit'));
+  }
 });
 
 test('capture d’écran RGB565 par écran', async () => {

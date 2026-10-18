@@ -605,7 +605,7 @@ function HabitEditor({
       <div className="setting-row" style={{ padding: 0, minHeight: 48 }}>
         <label className="setting-label" htmlFor="hab-show">
           Afficher sur l’écran
-          <span className="sub">Visible dans la liste des tâches de la tablette</span>
+          <span className="sub">Visible dans la liste des tâches de tes écrans</span>
         </label>
         <Switch id="hab-show" checked={show} onChange={setShow} label="Afficher sur l’écran" />
       </div>

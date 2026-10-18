@@ -19,14 +19,21 @@ export interface FetchOptions {
 }
 
 export async function fetchRaw(url: string, opts: FetchOptions = {}): Promise<Response> {
-  const res = await fetch(url, {
-    method: opts.method ?? 'GET',
-    headers: opts.headers,
-    body: opts.body,
-    signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000),
-    redirect: 'follow',
-  });
-  return res;
+  try {
+    return await fetch(url, {
+      method: opts.method ?? 'GET',
+      headers: opts.headers,
+      body: opts.body,
+      signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000),
+      redirect: 'follow',
+    });
+  } catch (err) {
+    // Erreur réseau (DNS, connexion refusée, délai) : message lisible plutôt qu'une erreur 500.
+    const host = new URL(url).host;
+    const name = (err as Error)?.name;
+    const msg = name === 'TimeoutError' || name === 'AbortError' ? `${host} ne répond pas (délai dépassé).` : `${host} est injoignable depuis le serveur.`;
+    throw new HttpError(502, String((err as Error)?.message ?? err), msg);
+  }
 }
 
 export async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promise<T> {

@@ -20,7 +20,7 @@ const PRELIGHT_OPTIONS = [0, 5, 10, 15, 20, 30];
 
 const sortAlarms = (list: Alarm[]) => list.slice().sort((a, b) => a.time.localeCompare(b.time));
 
-export function AlarmsCard({ alarms, routine }: { alarms: ApiData<Alarm[]>; routine: ApiData<Routine> }) {
+export function AlarmsCard({ deviceId, alarms, routine }: { deviceId: number; alarms: ApiData<Alarm[]>; routine: ApiData<Routine> }) {
   const toast = useToast();
   const confirm = useConfirm();
   const [editing, setEditing] = useState<Alarm | 'new' | null>(null);
@@ -47,7 +47,7 @@ export function AlarmsCard({ alarms, routine }: { alarms: ApiData<Alarm[]>; rout
   const remove = async (a: Alarm) => {
     const yes = await confirm({
       title: `Supprimer le réveil de ${a.time} ?`,
-      message: a.label ? `« ${a.label} » sera retiré de la tablette.` : undefined,
+      message: a.label ? `« ${a.label} » sera retiré de cet écran.` : undefined,
       confirmLabel: 'Supprimer',
       danger: true,
     });
@@ -89,7 +89,7 @@ export function AlarmsCard({ alarms, routine }: { alarms: ApiData<Alarm[]>; rout
           {list.length === 0 && editing !== 'new' && (
             <div className="empty">
               <strong>Aucun réveil</strong>
-              Ajoute un réveil : la tablette sonnera même sans connexion.
+              Ajoute un réveil : cet écran sonnera même sans connexion.
             </div>
           )}
           <ul className="plain-list divided">
@@ -97,6 +97,7 @@ export function AlarmsCard({ alarms, routine }: { alarms: ApiData<Alarm[]>; rout
               editing !== 'new' && editing?.id === a.id ? (
                 <li key={a.id} style={{ padding: '12px 0' }}>
                   <AlarmForm
+                    deviceId={deviceId}
                     alarm={a}
                     onCancel={() => setEditing(null)}
                     onSaved={(saved) => {
@@ -140,6 +141,7 @@ export function AlarmsCard({ alarms, routine }: { alarms: ApiData<Alarm[]>; rout
           {editing === 'new' && (
             <div style={{ padding: '12px 0', borderTop: list.length ? '1px solid var(--border)' : undefined }}>
               <AlarmForm
+                deviceId={deviceId}
                 alarm={null}
                 onCancel={() => setEditing(null)}
                 onSaved={(saved) => {
@@ -152,13 +154,23 @@ export function AlarmsCard({ alarms, routine }: { alarms: ApiData<Alarm[]>; rout
         </>
       )}
 
-      <RoutineBlock routine={routine} />
+      <RoutineBlock deviceId={deviceId} routine={routine} />
     </section>
   );
 }
 
 // ---------- Formulaire de réveil ----------
-function AlarmForm({ alarm, onCancel, onSaved }: { alarm: Alarm | null; onCancel: () => void; onSaved: (a: Alarm) => void }) {
+function AlarmForm({
+  deviceId,
+  alarm,
+  onCancel,
+  onSaved,
+}: {
+  deviceId: number;
+  alarm: Alarm | null;
+  onCancel: () => void;
+  onSaved: (a: Alarm) => void;
+}) {
   const toast = useToast();
   const [form, setForm] = useState<AlarmInput>(
     alarm
@@ -182,7 +194,7 @@ function AlarmForm({ alarm, onCancel, onSaved }: { alarm: Alarm | null; onCancel
     setBusy(true);
     const body = { ...form, label: form.label.trim() };
     try {
-      const saved = alarm ? await api.patch<Alarm>(`/api/alarms/${alarm.id}`, body) : await api.post<Alarm>('/api/alarms', body);
+      const saved = alarm ? await api.patch<Alarm>(`/api/alarms/${alarm.id}`, body) : await api.post<Alarm>(`/api/devices/${deviceId}/alarms`, body);
       onSaved(saved);
       toast.success(alarm ? 'Réveil modifié.' : `Réveil ajouté pour ${saved.time}.`);
     } catch (err) {
@@ -278,7 +290,7 @@ function AlarmForm({ alarm, onCancel, onSaved }: { alarm: Alarm | null; onCancel
 }
 
 // ---------- Routine matinale ----------
-function RoutineBlock({ routine }: { routine: ApiData<Routine> }) {
+function RoutineBlock({ deviceId, routine }: { deviceId: number; routine: ApiData<Routine> }) {
   const toast = useToast();
   const [saving, setSaving] = useState(false);
   const r = routine.data;
@@ -290,7 +302,7 @@ function RoutineBlock({ routine }: { routine: ApiData<Routine> }) {
     routine.setData(next);
     setSaving(true);
     try {
-      routine.setData(await api.put<Routine>('/api/routine', next));
+      routine.setData(await api.put<Routine>(`/api/devices/${deviceId}/routine`, next));
     } catch (err) {
       routine.setData(previous);
       toast.error(errorMessage(err));

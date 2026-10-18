@@ -392,6 +392,23 @@ if [ ! -f "$DATA_DIR/.env.backup" ]; then
   install -m 600 -o "$APP_USER" -g "$APP_USER" "$ENV_FILE" "$DATA_DIR/.env.backup"
 fi
 
+# Mise à jour depuis la version à un seul compte : la base est convertie (comptes, foyers)
+# au premier lancement. Le service est arrêté pour que personne n'écrive dedans pendant la
+# conversion, et une copie de l'ancienne base est gardée au cas où.
+if [ -f "$DATA_DIR/smart-dashboard.db" ] && [ ! -f "$DATA_DIR/main.db" ]; then
+  say "Conversion des données au format multi-comptes"
+  systemctl stop $SERVICE 2>/dev/null || true
+  SAUVEGARDE="$DATA_DIR/avant-comptes-$(date +%Y%m%d-%H%M%S)"
+  mkdir -p "$SAUVEGARDE"
+  for f in smart-dashboard.db smart-dashboard.db-wal smart-dashboard.db-shm; do
+    [ -f "$DATA_DIR/$f" ] && cp -a "$DATA_DIR/$f" "$SAUVEGARDE/"
+  done
+  chown -R "$APP_USER:$APP_USER" "$SAUVEGARDE"
+  chmod 700 "$SAUVEGARDE"
+  echo "  Copie de l'ancienne base : $SAUVEGARDE"
+  echo "  Après la mise à jour, connecte-toi avec l'identifiant « admin » et ton mot de passe habituel."
+fi
+
 say "Compte de la console"
 # Créé ici, avant la mise en ligne : personne ne peut « prendre » la console entre
 # l'installation et ta première visite. (Rien n'est demandé si le compte existe déjà.)
@@ -462,13 +479,17 @@ fi
 say "Terminé"
 cat <<EOF
 Console : https://$DOMAIN
-  - Connecte-toi avec le mot de passe choisi.
-  - Intégrations : renseigne Spotify, Roblox, Pathé, iCloud (voir docs/INTEGRATIONS.md).
-  - Tablette : Appareil & réveils → « Associer une tablette ».
+  - Connecte-toi avec ton identifiant administrateur (« admin » après une mise à jour) et ton mot de passe.
+  - Administration › Clés API & services : renseigne l'app Spotify du serveur (voir docs/INTEGRATIONS.md).
+  - Services : connecte les comptes de ton foyer (Spotify, iCloud, Pathé, Roblox, météo).
+  - Mes écrans › « Ajouter un écran » : associe chaque tablette avec son code.
+  - Administration › Comptes & invitations : invite d'autres personnes (chacune a son propre foyer).
 
 Commandes utiles :
   sudo systemctl status $SERVICE        # état du service
   sudo journalctl -u $SERVICE -f        # journaux en direct
+  cd $APP_DIR/server && sudo -u $APP_USER $NODE_BIN dist/cli.js users            # liste des comptes
+  cd $APP_DIR/server && sudo -u $APP_USER $NODE_BIN dist/cli.js reset-password   # mot de passe oublié
 Mise à jour : relance deploy/envoyer-sur-vps.ps1 depuis ton PC (les données sont conservées).
-Données : $DATA_DIR (base SQLite, cache d'images). Sauvegarde aussi $ENV_FILE.
+Données : $DATA_DIR (main.db + households/*.db, captures, cache d'images). Sauvegarde aussi $ENV_FILE.
 EOF

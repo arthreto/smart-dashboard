@@ -8,7 +8,7 @@ import type { Ok } from '../types';
 
 const MIN_PASSWORD = 10;
 
-function Brand() {
+export function Brand() {
   return (
     <div className="brand auth-brand">
       <span className="brand-mark" aria-hidden="true">
@@ -22,9 +22,12 @@ function Brand() {
   );
 }
 
+export const LOGIN_HINT = '3 à 32 caractères : lettres, chiffres, point, tiret ou tiret bas.';
+
 export function SetupScreen() {
-  useDocumentTitle('Créer ton mot de passe');
+  useDocumentTitle('Créer le compte administrateur');
   const { refresh } = useAuth();
+  const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [error, setError] = useState<string | null>(null);
@@ -35,6 +38,10 @@ export function SetupScreen() {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    if (!/^[A-Za-z0-9._-]{3,32}$/.test(login.trim())) {
+      setError(`Identifiant invalide : ${LOGIN_HINT.toLowerCase()}`);
+      return;
+    }
     if (password.length < MIN_PASSWORD) {
       setError(`Le mot de passe doit faire au moins ${MIN_PASSWORD} caractères.`);
       return;
@@ -46,7 +53,7 @@ export function SetupScreen() {
     setBusy(true);
     setError(null);
     try {
-      await request<Ok>('/api/auth/setup', { method: 'POST', body: { password }, skipAuthRedirect: true });
+      await request<Ok>('/api/auth/setup', { method: 'POST', body: { login: login.trim(), password }, skipAuthRedirect: true });
       await refresh();
     } catch (err) {
       setError(errorMessage(err));
@@ -59,11 +66,25 @@ export function SetupScreen() {
       <form className="auth-card" onSubmit={submit} noValidate>
         <Brand />
         <div>
-          <h1 className="auth-title">Créer ton mot de passe</h1>
+          <h1 className="auth-title">Compte administrateur</h1>
           <p className="auth-text">
-            Première connexion : choisis le mot de passe qui protégera ta console. Au moins {MIN_PASSWORD} caractères.
+            Première connexion : choisis l’identifiant et le mot de passe du compte qui gère ce serveur (et ton propre foyer).
           </p>
         </div>
+        <Field label="Identifiant" htmlFor="setup-login" hint={LOGIN_HINT}>
+          <input
+            id="setup-login"
+            className="input"
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
+            value={login}
+            onChange={(e) => setLogin(e.target.value)}
+            placeholder="admin"
+            autoFocus
+            required
+          />
+        </Field>
         <Field
           label="Mot de passe"
           htmlFor="setup-password"
@@ -110,6 +131,7 @@ export function SetupScreen() {
 export function LoginScreen() {
   useDocumentTitle('Connexion');
   const { refresh } = useAuth();
+  const [login, setLogin] = useState('');
   const [password, setPassword] = useState('');
   const [code, setCode] = useState('');
   const [needTotp, setNeedTotp] = useState(false);
@@ -123,8 +145,8 @@ export function LoginScreen() {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!password) {
-      setError('Saisis ton mot de passe.');
+    if (!login.trim() || !password) {
+      setError('Saisis ton identifiant et ton mot de passe.');
       return;
     }
     if (needTotp && !/^\d{6}$/.test(code)) {
@@ -136,12 +158,17 @@ export function LoginScreen() {
     try {
       await request<Ok>('/api/auth/login', {
         method: 'POST',
-        body: needTotp ? { password, totp: code } : { password },
+        body: needTotp ? { login: login.trim(), password, totp: code } : { login: login.trim(), password },
         skipAuthRedirect: true,
       });
       await refresh();
     } catch (err) {
       setBusy(false);
+      if (err instanceof ApiError && err.code === 'invalid_totp') {
+        setError(err.message || 'Code de vérification incorrect.');
+        setCode('');
+        return;
+      }
       if (err instanceof ApiError && err.code === 'totp_required') {
         if (needTotp) setError(err.message || 'Code de double authentification incorrect.');
         setNeedTotp(true);
@@ -149,7 +176,7 @@ export function LoginScreen() {
         return;
       }
       if (err instanceof ApiError && err.code === 'invalid_credentials') {
-        setError(needTotp ? 'Mot de passe ou code incorrect.' : 'Mot de passe incorrect.');
+        setError(needTotp ? 'Identifiant, mot de passe ou code incorrect.' : 'Identifiant ou mot de passe incorrect.');
         if (needTotp) setCode('');
         return;
       }
@@ -166,9 +193,23 @@ export function LoginScreen() {
           <p className="auth-text">
             {needTotp
               ? 'Saisis le code à 6 chiffres affiché dans ton application d’authentification.'
-              : 'Accède à la console de ta tablette.'}
+              : 'Accède à la console de ton foyer et de tes écrans.'}
           </p>
         </div>
+        <Field label="Identifiant" htmlFor="login-id">
+          <input
+            id="login-id"
+            className="input"
+            autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
+            value={login}
+            onChange={(e) => setLogin(e.target.value)}
+            autoFocus
+            required
+            readOnly={needTotp}
+          />
+        </Field>
         <Field label="Mot de passe" htmlFor="login-password">
           <input
             id="login-password"
@@ -177,9 +218,8 @@ export function LoginScreen() {
             autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            autoFocus
             required
-            readOnly={needTotp && busy}
+            readOnly={needTotp}
           />
         </Field>
         {needTotp && (

@@ -65,6 +65,18 @@
   border-radius: var(--radius-panel);
   background: var(--surface-raised);
   min-height: 60px;
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+a.device-pill:hover {
+  background: var(--surface-inset);
+}
+.device-pill-title,
+.device-pill-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .device-pill-title {
   font-size: 14px;
@@ -75,10 +87,23 @@
   color: var(--text-3);
 }
 
+.nav-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 .nav {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+.nav-section {
+  margin: 16px 10px 6px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-3);
 }
 .nav-link {
   display: flex;
@@ -127,7 +152,22 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 10px;
+  padding: 8px 10px;
+  margin: -8px 0 0;
+  border-radius: var(--radius-ctl);
+  color: inherit;
+  text-decoration: none;
+  transition: background 0.15s;
+}
+.account-row:hover,
+.account-row[aria-current='page'] {
+  background: rgba(255, 255, 255, 0.04);
+}
+.account-name,
+.account-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .account-logout {
   width: 100%;
@@ -262,7 +302,7 @@
     grid-area: device;
     min-height: 0;
   }
-  .nav {
+  .nav-wrap {
     grid-area: nav;
     flex-direction: row;
     overflow-x: auto;
@@ -270,8 +310,19 @@
     padding-bottom: 2px;
     scrollbar-width: none;
   }
-  .nav::-webkit-scrollbar {
+  .nav-wrap::-webkit-scrollbar {
     display: none;
+  }
+  .nav {
+    flex-direction: row;
+    gap: 6px;
+  }
+  .nav-section {
+    display: none;
+  }
+  .nav-section + .nav {
+    padding-left: 6px;
+    border-left: 1px solid var(--border-strong);
   }
   .nav-link {
     flex-shrink: 0;

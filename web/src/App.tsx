@@ -1,15 +1,22 @@
-import { BrowserRouter, Link, Route, Routes } from 'react-router-dom';
+import type { ReactNode } from 'react';
+import { BrowserRouter, Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './auth';
 import { Layout } from './components/Layout';
 import { ConfirmProvider } from './components/Modal';
 import { ToastProvider } from './components/Toast';
 import { PageLoading } from './components/ui';
 import { Icon } from './icons';
+import { AccountPage } from './pages/AccountPage';
+import { AdminOverviewPage } from './pages/admin/AdminOverviewPage';
+import { AdminServicesPage } from './pages/admin/AdminServicesPage';
+import { AdminUsersPage } from './pages/admin/AdminUsersPage';
 import { LoginScreen, SetupScreen } from './pages/AuthScreen';
-import { DevicePage } from './pages/DevicePage';
 import { HabitsPage } from './pages/HabitsPage';
-import { IntegrationsPage } from './pages/IntegrationsPage';
+import { InvitePage } from './pages/InvitePage';
 import { OverviewPage } from './pages/OverviewPage';
+import { ScreenPage } from './pages/ScreenPage';
+import { ScreensPage } from './pages/ScreensPage';
+import { ServicesPage } from './pages/ServicesPage';
 
 function NotFound() {
   return (
@@ -22,8 +29,14 @@ function NotFound() {
   );
 }
 
+function AdminOnly({ children }: { children: ReactNode }) {
+  const { status } = useAuth();
+  return status?.user?.role === 'admin' ? <>{children}</> : <NotFound />;
+}
+
 function AuthGate() {
   const { status, error, refresh } = useAuth();
+  const location = useLocation();
 
   if (!status) {
     if (error) {
@@ -47,6 +60,14 @@ function AuthGate() {
     return <PageLoading label="Connexion à la console…" />;
   }
 
+  // Lien d'invitation ou de réinitialisation : accessible sans être connecté.
+  if (location.pathname.startsWith('/invitation/')) {
+    return (
+      <Routes>
+        <Route path="/invitation/:token" element={<InvitePage />} />
+      </Routes>
+    );
+  }
   if (status.setupRequired) return <SetupScreen />;
   if (!status.authenticated) return <LoginScreen />;
 
@@ -54,9 +75,38 @@ function AuthGate() {
     <Layout>
       <Routes>
         <Route path="/" element={<OverviewPage />} />
+        <Route path="/ecrans" element={<ScreensPage />} />
+        <Route path="/ecrans/:id" element={<ScreenPage />} />
         <Route path="/habitudes" element={<HabitsPage />} />
-        <Route path="/integrations" element={<IntegrationsPage />} />
-        <Route path="/appareil" element={<DevicePage />} />
+        <Route path="/services" element={<ServicesPage />} />
+        <Route path="/compte" element={<AccountPage />} />
+        <Route
+          path="/admin"
+          element={
+            <AdminOnly>
+              <AdminOverviewPage />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="/admin/comptes"
+          element={
+            <AdminOnly>
+              <AdminUsersPage />
+            </AdminOnly>
+          }
+        />
+        <Route
+          path="/admin/services"
+          element={
+            <AdminOnly>
+              <AdminServicesPage />
+            </AdminOnly>
+          }
+        />
+        {/* Anciennes adresses (console à un seul écran). */}
+        <Route path="/integrations" element={<Navigate to={{ pathname: '/services', search: location.search }} replace />} />
+        <Route path="/appareil" element={<Navigate to="/ecrans" replace />} />
         <Route path="*" element={<NotFound />} />
       </Routes>
     </Layout>

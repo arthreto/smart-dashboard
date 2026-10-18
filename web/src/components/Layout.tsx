@@ -4,7 +4,7 @@ import { useAuth } from '../auth';
 import { formatAgo } from '../format';
 import { useApiData, useNow, type ApiData } from '../hooks';
 import { Icon, type IconName } from '../icons';
-import type { Overview, OverviewDevice } from '../types';
+import type { Overview } from '../types';
 
 // Les données de /api/overview servent à la fois à la pastille de la barre latérale
 // (rafraîchie toutes les 30 s) et à la page Vue d'ensemble : une seule source partagée.
@@ -22,56 +22,87 @@ interface NavItem {
   icon: IconName;
   color: string;
   strokeWidth: number;
+  end?: boolean;
 }
 
 const NAV: NavItem[] = [
-  { to: '/', label: 'Vue d’ensemble', icon: 'home', color: '#0A84FF', strokeWidth: 2.2 },
+  { to: '/', label: 'Vue d’ensemble', icon: 'home', color: '#0A84FF', strokeWidth: 2.2, end: true },
+  { to: '/ecrans', label: 'Mes écrans', icon: 'display', color: '#5E5CE6', strokeWidth: 2.2 },
   { to: '/habitudes', label: 'Tâches & habitudes', icon: 'checkCircle', color: '#30D158', strokeWidth: 2.4 },
-  { to: '/integrations', label: 'Intégrations & clés API', icon: 'key', color: '#FF9F0A', strokeWidth: 2.4 },
-  { to: '/appareil', label: 'Appareil & réveils', icon: 'display', color: '#636369', strokeWidth: 2.2 },
+  { to: '/services', label: 'Services', icon: 'puzzle', color: '#FF9F0A', strokeWidth: 2.2 },
+  { to: '/compte', label: 'Mon compte', icon: 'user', color: '#636369', strokeWidth: 2.2 },
 ];
 
-export function deviceHeadline(device: OverviewDevice | undefined): { title: string; tone: 'ok' | 'off' | 'warning' } {
-  if (!device) return { title: 'Tablette', tone: 'off' };
-  if (!device.paired) return { title: 'Aucune tablette associée', tone: 'warning' };
-  return device.online ? { title: 'Tablette en ligne', tone: 'ok' } : { title: 'Tablette hors ligne', tone: 'off' };
+const ADMIN_NAV: NavItem[] = [
+  { to: '/admin', label: 'Serveur', icon: 'server', color: '#FF453A', strokeWidth: 2.2, end: true },
+  { to: '/admin/comptes', label: 'Comptes & invitations', icon: 'shield', color: '#FF375F', strokeWidth: 2.2 },
+  { to: '/admin/services', label: 'Clés API & services', icon: 'key', color: '#BF5AF2', strokeWidth: 2.4 },
+];
+
+function NavList({ items, label }: { items: NavItem[]; label: string }) {
+  return (
+    <nav className="nav" aria-label={label}>
+      {items.map((item) => (
+        <NavLink key={item.to} to={item.to} end={item.end} className="nav-link">
+          <span className="nav-icon" style={{ background: item.color }} aria-hidden="true">
+            <Icon name={item.icon} size={16} strokeWidth={item.strokeWidth} />
+          </span>
+          {item.label}
+        </NavLink>
+      ))}
+    </nav>
+  );
 }
 
-function DeviceStatusPill({ overview, now }: { overview: ApiData<Overview>; now: number }) {
-  const device = overview.data?.device;
-  if (!device) {
+function ScreensPill({ overview, now }: { overview: ApiData<Overview>; now: number }) {
+  const devices = overview.data?.devices;
+  if (!devices) {
     return (
       <div className="device-pill" aria-live="polite">
         <span className="dot dot-off" aria-hidden="true" />
         <div className="spacer" style={{ minWidth: 0 }}>
           <div className="device-pill-title">{overview.error ? 'État indisponible' : 'Chargement…'}</div>
-          <div className="device-pill-sub">{overview.error ? 'Nouvel essai dans 30 s' : 'Connexion à la tablette'}</div>
+          <div className="device-pill-sub">{overview.error ? 'Nouvel essai dans 30 s' : 'Connexion aux écrans'}</div>
         </div>
       </div>
     );
   }
-  const head = deviceHeadline(device);
-  const parts: string[] = [];
-  if (device.paired) {
-    parts.push(device.lastSeenAt ? `Vue ${formatAgo(device.lastSeenAt, now)}` : 'Jamais vue');
-    if (typeof device.battery === 'number') parts.push(`batterie ${device.battery} %${device.charging ? ' (en charge)' : ''}`);
+  const paired = devices.filter((d) => d.paired);
+  const online = paired.filter((d) => d.online);
+  let tone: 'ok' | 'off' | 'warning' = 'off';
+  let title: string;
+  let sub: string;
+  if (paired.length === 0) {
+    tone = 'warning';
+    title = 'Aucun écran associé';
+    sub = 'Ajoute-le depuis « Mes écrans »';
+  } else if (paired.length === 1) {
+    const d = paired[0];
+    tone = d.online ? 'ok' : 'off';
+    title = `${d.name} ${d.online ? 'en ligne' : 'hors ligne'}`;
+    const parts = [d.lastSeenAt ? `Vu ${formatAgo(d.lastSeenAt, now)}` : 'Jamais vu'];
+    if (typeof d.battery === 'number') parts.push(`batterie ${d.battery} %${d.charging ? ' (en charge)' : ''}`);
+    sub = parts.join(' · ');
   } else {
-    parts.push('Associe-la depuis « Appareil »');
+    tone = online.length === paired.length ? 'ok' : online.length > 0 ? 'warning' : 'off';
+    title = `${online.length} / ${paired.length} écrans en ligne`;
+    sub = online.length === paired.length ? 'Tout fonctionne' : `Hors ligne : ${paired.filter((d) => !d.online).map((d) => d.name).join(', ')}`;
   }
   return (
-    <div className="device-pill" aria-live="polite">
-      <span className={`dot dot-${head.tone}`} aria-hidden="true" />
+    <NavLink to="/ecrans" className="device-pill" aria-live="polite">
+      <span className={`dot dot-${tone}`} aria-hidden="true" />
       <div className="spacer" style={{ minWidth: 0 }}>
-        <div className="device-pill-title">{head.title}</div>
-        <div className="device-pill-sub">{parts.join(' · ')}</div>
+        <div className="device-pill-title">{title}</div>
+        <div className="device-pill-sub">{sub}</div>
       </div>
-    </div>
+    </NavLink>
   );
 }
 
 export function Layout({ children }: { children: ReactNode }) {
   const overview = useApiData<Overview>('/api/overview', { intervalMs: 30_000 });
   const { status, logout } = useAuth();
+  const user = status?.user ?? null;
   const now = useNow(10_000);
 
   return (
@@ -89,33 +120,32 @@ export function Layout({ children }: { children: ReactNode }) {
               </div>
             </div>
 
-            <DeviceStatusPill overview={overview} now={now} />
+            <ScreensPill overview={overview} now={now} />
 
-            <nav className="nav" aria-label="Console">
-              {NAV.map((item) => (
-                <NavLink key={item.to} to={item.to} end={item.to === '/'} className="nav-link">
-                  <span className="nav-icon" style={{ background: item.color }} aria-hidden="true">
-                    <Icon name={item.icon} size={16} strokeWidth={item.strokeWidth} />
-                  </span>
-                  {item.label}
-                </NavLink>
-              ))}
-            </nav>
+            <div className="nav-wrap">
+              <NavList items={NAV} label="Mon foyer" />
+              {user?.role === 'admin' && (
+                <>
+                  <div className="nav-section" aria-hidden="true">
+                    Administration
+                  </div>
+                  <NavList items={ADMIN_NAV} label="Administration" />
+                </>
+              )}
+            </div>
 
             <div className="sidebar-spacer" />
 
             <div className="account">
-              <div className="account-row">
+              <NavLink to="/compte" className="account-row">
                 <span className="account-avatar" aria-hidden="true">
                   <Icon name="user" size={18} />
                 </span>
-                <div className="spacer">
-                  <div className="account-name">Mon compte</div>
-                  <div className="account-sub">
-                    {status?.totpEnabled ? 'Double authentification active' : 'Double authentification inactive'}
-                  </div>
+                <div className="spacer" style={{ minWidth: 0 }}>
+                  <div className="account-name">{user?.name || user?.login || 'Mon compte'}</div>
+                  <div className="account-sub">{user ? `Foyer « ${user.household.name} »` : ''}</div>
                 </div>
-              </div>
+              </NavLink>
               <button
                 type="button"
                 className="btn btn-sm btn-outline account-logout"

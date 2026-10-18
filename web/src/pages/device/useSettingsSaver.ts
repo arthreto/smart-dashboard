@@ -13,8 +13,9 @@ export interface SettingsSaver {
 
 const DEBOUNCE_MS = 700;
 
-/** Enregistrement automatique des réglages de l'écran (PUT /api/device/settings, corps partiel). */
+/** Enregistrement automatique des réglages d'un écran (PUT /api/devices/:id/settings, corps partiel). */
 export function useSettingsSaver(
+  deviceId: number | null,
   setDevice: React.Dispatch<React.SetStateAction<DeviceInfo | null>>,
   reload: () => Promise<void>,
 ): SettingsSaver {
@@ -28,10 +29,10 @@ export function useSettingsSaver(
     window.clearTimeout(timer.current);
     const patch = pending.current;
     pending.current = {};
-    if (Object.keys(patch).length === 0) return;
+    if (Object.keys(patch).length === 0 || deviceId === null) return;
     setStatus('saving');
     try {
-      const saved = await api.put<DeviceSettings>('/api/device/settings', patch);
+      const saved = await api.put<DeviceSettings>(`/api/devices/${deviceId}/settings`, patch);
       setDevice((d) => (d ? { ...d, settings: { ...d.settings, ...saved, ...pending.current } } : d));
       setStatus('saved');
       window.clearTimeout(savedTimer.current);
@@ -41,7 +42,7 @@ export function useSettingsSaver(
       toast.error(`Réglage non enregistré : ${errorMessage(err)}`);
       void reload();
     }
-  }, [reload, setDevice, toast]);
+  }, [deviceId, reload, setDevice, toast]);
 
   const update = useCallback<SettingsSaver['update']>(
     (patch, opts) => {

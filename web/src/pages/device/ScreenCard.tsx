@@ -183,7 +183,7 @@ export function ScreenCard({ device, saver }: { device: DeviceInfo; saver: Setti
         <Switch checked={s.touchWake} onChange={(v) => saver.update({ touchWake: v }, { immediate: true })} label="Réveil au toucher" />
       </SettingRow>
 
-      <SettingRow label="Synchronisation de la tablette" htmlFor="set-poll" sub="Fréquence à laquelle l’écran récupère les données">
+      <SettingRow label="Synchronisation" htmlFor="set-poll" sub="Fréquence à laquelle l’écran récupère les données">
         <select
           id="set-poll"
           className="select auto"
