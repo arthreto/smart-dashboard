@@ -11,9 +11,6 @@ using namespace ui;
 
 namespace {
 
-constexpr int HOUR_H = 36;
-constexpr int FIRST_HOUR = 7;
-constexpr int LAST_HOUR = 20;
 constexpr int GRID_TOP = 9;  // marge pour que l'heure soit centrée sur sa ligne, même la première
 constexpr int LINE_H = 18;   // hauteur d'une ligne de texte fig_s14 / fig_m14
 const char* const DAY_SHORT[7] = {"LUN.", "MAR.", "MER.", "JEU.", "VEN.", "SAM.", "DIM."};
@@ -37,7 +34,8 @@ void buildCalendar(lv_obj_t* parent) {
     std::string title = util::monthName(now.tm_mon);
     title[0] = static_cast<char>(title[0] - 32);
     title += " " + std::to_string(now.tm_year + 1900);
-    lv_obj_t* actions = pageHeader(parent, title, "Semaine " + std::to_string(isoWeek(now)) + (a.valid ? " · calendrier iCloud" : " · iCloud non connecté"));
+    lv_obj_t* actions = pageHeader(parent, title,
+                                   a.valid ? "Aujourd’hui et les 6 jours suivants · iCloud" : "Semaine " + std::to_string(isoWeek(now)) + " · iCloud non connecté");
     lv_obj_t* today = button(actions, "Aujourd’hui", mix(th().bg, color::red(), 40), th().dark ? lv_color_hex(0xFF6961) : lv_color_hex(0xD70015), 52);
     (void)today;
 
@@ -58,76 +56,166 @@ void buildCalendar(lv_obj_t* parent) {
     lv_obj_t* right = col(body, 14);
     lv_obj_set_size(right, 380, lv_pct(100));
 
-    int wdToday = util::weekdayMon0(now);
+    // Jours affichés : ceux envoyés par le serveur (aujourd'hui puis les 6 suivants) ;
+    // sans calendrier, la semaine en cours.
+    struct DayCol {
+        struct tm tm;
+        const DayEvents* data;
+        bool today;
+    };
+    std::vector<DayCol> weekDays;
+    char todayKey[11];
+    strftime(todayKey, sizeof todayKey, "%Y-%m-%d", &now);
+    bool fromServer = a.valid && a.week.size() == 7 && !a.week[0].date.empty();
+    for (int d = 0; d < 7; d++) {
+        struct tm day = now;
+        if (fromServer) {
+            int y = 0, m = 0, md = 0;
+            if (sscanf(a.week[d].date.c_str(), "%d-%d-%d", &y, &m, &md) == 3) {
+                day = {};
+                day.tm_year = y - 1900;
+                day.tm_mon = m - 1;
+                day.tm_mday = md;
+            }
+        } else {
+            day.tm_mday += d - util::weekdayMon0(now);
+        }
+        day.tm_hour = 12;
+        day.tm_isdst = -1;
+        mktime(&day);
+        char key[11];
+        strftime(key, sizeof key, "%Y-%m-%d", &day);
+        weekDays.push_back({day, fromServer ? &a.week[d] : nullptr, std::string(key) == todayKey});
+    }
+
+    // Plage horaire : 7 h – 20 h, élargie si un événement commence plus tôt ou finit plus tard.
+    int firstHour = 7, lastHour = 20;
+    size_t allDayMax = 0;
+    for (const DayCol& dc : weekDays) {
+        if (!dc.data) continue;
+        size_t allDay = 0;
+        for (const Event& e : dc.data->events) {
+            if (e.allDay) {
+                allDay++;
+                continue;
+            }
+            int s = util::minutesOf(e.start), en = util::minutesOf(e.end);
+            if (s < 0) continue;
+            if (en <= s) en = std::min(24 * 60, s + 60);
+            firstHour = std::min(firstHour, s / 60);
+            lastHour = std::max(lastHour, std::min(24, (en + 59) / 60));
+        }
+        allDayMax = std::max(allDayMax, allDay);
+    }
+    const int ALLDAY_ROW = 26;
+    int allDayRows = static_cast<int>(std::min<size_t>(allDayMax, 2));
+    int allDayH = allDayRows ? allDayRows * ALLDAY_ROW + 6 : 0;
+    const int GRID_H = 468 - allDayH;
+    const int hourCount = lastHour - firstHour;
+    const int HOUR_H = GRID_H / hourCount;
+    const int labelStep = HOUR_H >= 24 ? 1 : 2;
+
     lv_obj_t* heads = row(wk, 0);
     lv_obj_set_size(heads, lv_pct(100), 60);
     lv_obj_t* gutter = box(heads);
     lv_obj_set_width(gutter, 48);
-    for (int d = 0; d < 7; d++) {
-        struct tm day = now;
-        day.tm_mday += d - wdToday;
-        day.tm_hour = 12;
-        mktime(&day);
+    const lv_color_t todayRed = th().dark ? lv_color_hex(0xFF6961) : lv_color_hex(0xD70015);
+    for (const DayCol& dc : weekDays) {
         lv_obj_t* c = col(heads, 2);
         lv_obj_set_flex_grow(c, 1);
         lv_obj_set_flex_align(c, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-        bool isToday = d == wdToday;
-        label(c, DAY_SHORT[d], &fig_s14, isToday ? (th().dark ? lv_color_hex(0xFF6961) : lv_color_hex(0xD70015)) : th().text2);
+        label(c, DAY_SHORT[util::weekdayMon0(dc.tm)], &fig_s14, dc.today ? todayRed : th().text2);
         // Même case de 34 px pour tous les jours : les en-têtes restent alignés.
         lv_obj_t* num = box(c);
         lv_obj_set_size(num, 34, 34);
-        if (isToday) {
+        if (dc.today) {
             lv_obj_set_style_radius(num, 17, 0);
             setBg(num, color::red());
-            lv_obj_center(label(num, std::to_string(day.tm_mday), &fig_s20, color::white()));
+            lv_obj_center(label(num, std::to_string(dc.tm.tm_mday), &fig_s20, color::white()));
         } else {
-            lv_obj_center(label(num, std::to_string(day.tm_mday), &fig_s22, th().text));
+            lv_obj_center(label(num, std::to_string(dc.tm.tm_mday), &fig_s22, th().text));
         }
     }
 
     // Largeur utile du texte dans un événement (colonne − marges), pour savoir si le
     // titre tient sur une ligne.
     lv_obj_update_layout(heads);
-    int evTextW = lv_obj_get_width(lv_obj_get_child(heads, 1)) * 94 / 100 - 15;
+    int colW = lv_obj_get_width(lv_obj_get_child(heads, 1));
+    int evTextW = colW * 94 / 100 - 15;
     if (evTextW < 40) evTextW = 70;
 
+    // Événements « journée entière » : une bande sous les jours.
+    if (allDayRows) {
+        lv_obj_t* band = row(wk, 0);
+        lv_obj_set_size(band, lv_pct(100), allDayH);
+        lv_obj_set_flex_align(band, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+        lv_obj_t* lg = box(band);
+        lv_obj_set_size(lg, 48, allDayH);
+        lv_obj_t* ll = label(lg, "Jour", &fig_m14, th().text3);
+        lv_obj_set_pos(ll, 0, (ALLDAY_ROW - LINE_H) / 2);
+        for (const DayCol& dc : weekDays) {
+            lv_obj_t* cell = col(band, 3);
+            lv_obj_set_height(cell, allDayH);
+            lv_obj_set_flex_grow(cell, 1);
+            lv_obj_set_style_pad_hor(cell, 2, 0);
+            if (!dc.data) continue;
+            std::vector<const Event*> list;
+            for (const Event& e : dc.data->events) if (e.allDay) list.push_back(&e);
+            for (size_t i = 0; i < list.size() && static_cast<int>(i) < allDayRows; i++) {
+                bool more = static_cast<int>(i) == allDayRows - 1 && list.size() > static_cast<size_t>(allDayRows);
+                lv_color_t base = hex(list[i]->color);
+                lv_obj_t* pillObj = box(cell);
+                lv_obj_set_size(pillObj, lv_pct(100), ALLDAY_ROW - 3);
+                lv_obj_set_style_radius(pillObj, 6, 0);
+                setBg(pillObj, mix(th().card, base, 70));
+                std::string text = more ? "+" + std::to_string(list.size() - i) + " autres" : list[i]->title;
+                lv_obj_t* t = label(pillObj, text, &fig_s14, eventText(base));
+                lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
+                lv_obj_set_width(t, lv_pct(100));
+                lv_obj_set_style_pad_hor(t, 6, 0);
+                lv_obj_align(t, LV_ALIGN_LEFT_MID, 0, 0);
+            }
+        }
+    }
+
     lv_obj_t* grid = row(wk, 0);
-    lv_obj_set_size(grid, lv_pct(100), GRID_TOP + HOUR_H * (LAST_HOUR - FIRST_HOUR));
+    lv_obj_set_size(grid, lv_pct(100), GRID_TOP + HOUR_H * hourCount);
     lv_obj_set_style_margin_top(grid, 2, 0);
     lv_obj_set_flex_align(grid, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_t* hours = box(grid);
     lv_obj_set_size(hours, 48, lv_pct(100));
-    for (int h = FIRST_HOUR; h < LAST_HOUR; h++) {
-        char b[8];
-        snprintf(b, sizeof b, "%02d:00", h);
+    for (int h = firstHour; h < lastHour; h += labelStep) {
+        char b[16];
+        snprintf(b, sizeof b, "%02d:00", h % 100);
         lv_obj_t* l = label(hours, b, &fig_m14, th().text3);
-        lv_obj_set_pos(l, 0, GRID_TOP + (h - FIRST_HOUR) * HOUR_H - LINE_H / 2);
+        lv_obj_set_pos(l, 0, GRID_TOP + (h - firstHour) * HOUR_H - LINE_H / 2);
     }
-    for (int d = 0; d < 7; d++) {
+    for (const DayCol& dc : weekDays) {
         lv_obj_t* column = box(grid);
         lv_obj_set_height(column, lv_pct(100));
         lv_obj_set_flex_grow(column, 1);
         lv_obj_set_style_border_side(column, LV_BORDER_SIDE_LEFT, 0);
         lv_obj_set_style_border_width(column, 1, 0);
         lv_obj_set_style_border_color(column, th().hairline, 0);
-        if (d == wdToday) setBg(column, mix(th().card, color::red(), 12));
-        for (int h = 0; h < LAST_HOUR - FIRST_HOUR; h++) {
+        if (dc.today) setBg(column, mix(th().card, color::red(), 12));
+        for (int h = 0; h < hourCount; h += labelStep) {
             lv_obj_t* line = box(column);
             lv_obj_set_size(line, lv_pct(100), 1);
             lv_obj_set_pos(line, 0, GRID_TOP + h * HOUR_H);
             setBg(line, th().hairline);
         }
-        if (a.valid && d < static_cast<int>(a.week.size())) {
-            for (const Event& e : a.week[d].events) {
+        if (dc.data) {
+            for (const Event& e : dc.data->events) {
                 if (e.allDay) continue;
                 int s = util::minutesOf(e.start), en = util::minutesOf(e.end);
                 if (s < 0) continue;
-                if (en <= s) en = s + 60;
-                int top = std::max(0, (s - FIRST_HOUR * 60) * HOUR_H / 60);
-                int bottom = std::min(HOUR_H * (LAST_HOUR - FIRST_HOUR), (en - FIRST_HOUR * 60) * HOUR_H / 60);
+                if (en <= s) en = std::min(24 * 60, s + 60);
+                int top = std::max(0, (s - firstHour * 60) * HOUR_H / 60);
+                int bottom = std::min(HOUR_H * hourCount, (en - firstHour * 60) * HOUR_H / 60);
                 if (bottom <= top) continue;
                 lv_color_t base = hex(e.color);
                 int h = std::max(28, bottom - top - 2);
+                top = std::max(0, std::min(top, HOUR_H * hourCount - h - 1));  // reste dans la grille (ex. 23 h – minuit)
                 lv_obj_t* ev = col(column, 0);
                 lv_obj_set_size(ev, lv_pct(94), h);
                 lv_obj_set_pos(ev, 3, GRID_TOP + top + 1);
@@ -150,10 +238,10 @@ void buildCalendar(lv_obj_t* parent) {
                 if (showTime) label(ev, e.start, &fig_m14, eventText(base));
             }
         }
-        if (d == wdToday) {
+        if (dc.today) {
             int nowMin = now.tm_hour * 60 + now.tm_min;
-            if (nowMin >= FIRST_HOUR * 60 && nowMin < LAST_HOUR * 60) {
-                int y = GRID_TOP + (nowMin - FIRST_HOUR * 60) * HOUR_H / 60;
+            if (nowMin >= firstHour * 60 && nowMin < lastHour * 60) {
+                int y = GRID_TOP + (nowMin - firstHour * 60) * HOUR_H / 60;
                 lv_obj_t* nl = box(column);
                 lv_obj_set_size(nl, lv_pct(100), 2);
                 lv_obj_set_pos(nl, 0, y);

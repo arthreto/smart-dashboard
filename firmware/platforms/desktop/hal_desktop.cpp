@@ -49,11 +49,14 @@ DesktopHal::~DesktopHal() {
 hal::HttpResponse DesktopHal::http(const std::string& method, const std::string& url, const std::string& body, const hal::Headers& headers,
                                    int timeoutMs) {
     hal::HttpResponse res;
-    CURL* c = curl_easy_init();
+    // Un client par thread réseau, réutilisé : la connexion HTTPS reste ouverte entre deux
+    // requêtes (pas de nouvelle poignée de main TLS à chaque image ou synchro).
+    thread_local CURL* c = curl_easy_init();
     if (!c) {
         res.error = "curl indisponible";
         return res;
     }
+    curl_easy_reset(c);
     struct curl_slist* list = nullptr;
     for (const auto& [k, v] : headers) list = curl_slist_append(list, (k + ": " + v).c_str());
     curl_easy_setopt(c, CURLOPT_URL, url.c_str());
@@ -82,7 +85,6 @@ hal::HttpResponse DesktopHal::http(const std::string& method, const std::string&
         res.error = curl_easy_strerror(rc);
     }
     curl_slist_free_all(list);
-    curl_easy_cleanup(c);
     return res;
 }
 

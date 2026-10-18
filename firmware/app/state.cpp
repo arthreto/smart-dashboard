@@ -147,6 +147,16 @@ void parseAlarmObj(const cJSON* a, Alarm& al) {
 
 }  // namespace
 
+bool isUnchanged(const std::string& json, int64_t& serverTime) {
+    if (json.size() > 512 || json.find("\"unchanged\"") == std::string::npos) return false;
+    cJSON* root = cJSON_Parse(json.c_str());
+    if (!root) return false;
+    bool yes = cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(root, "unchanged"));
+    serverTime = num64(root, "serverTime");
+    cJSON_Delete(root);
+    return yes;
+}
+
 bool parseState(const std::string& json, State& out, std::string& error) {
     cJSON* root = cJSON_Parse(json.c_str());
     if (!root) {
@@ -156,6 +166,7 @@ bool parseState(const std::string& json, State& out, std::string& error) {
     State s;
     s.loaded = true;
     s.serverTime = num64(root, "serverTime");
+    s.stateHash = str(root, "stateHash");
     s.tz = str(root, "tz", "Europe/Paris");
     s.tzPosix = str(root, "tzPosix", "CET-1CEST,M3.5.0,M10.5.0/3");
     parseSettings(obj(root, "settings"), s.settings);

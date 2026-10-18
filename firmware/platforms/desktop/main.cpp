@@ -139,7 +139,7 @@ int main(int argc, char** argv) {
         platform.simulatePaired();
         for (const Shot& s : shots) {
             App::get().navigate(s.s);
-            spin(400);
+            spin(live ? 2500 : 400);  // en direct : le temps de recevoir les images
             writeFrame(disp, shotsDir + "/" + s.name + ".ppm");
         }
         App::get().navigate(Screen::Home);

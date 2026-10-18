@@ -100,6 +100,7 @@ private:
     void rebuild();
     void buildRail(lv_obj_t* parent);
     void poll();
+    int pollInterval() const;
     void applyState(const std::string& json, bool fromCache);
     void processCommands();
     void heartbeat();
@@ -129,6 +130,7 @@ private:
     bool ringing_ = false;
     int64_t lastSync_ = 0;
     uint32_t lastPollMs_ = 0;
+    uint32_t lastHeartbeatMs_ = 0;
     uint32_t screenOffSinceMs_ = 0;
     std::string lastError_;
     std::vector<int> ackCommands_;

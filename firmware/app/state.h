@@ -18,7 +18,7 @@ struct Settings {
     bool touchWake = true;
     bool lockOnWake = true;
     int lockAfterMinutes = 5;
-    int pollSeconds = 60;
+    int pollSeconds = 30;
     std::string pinSalt;
     std::string pinHash;
 };
@@ -198,9 +198,12 @@ struct State {
     Cinema cinema;
     Stats stats;
     std::vector<Command> commands;
+    std::string stateHash;  // empreinte envoyée par le serveur (synchro « rien n'a changé »)
 };
 
 bool parseState(const std::string& json, State& out, std::string& error);
+/** Réponse « rien n'a changé » du serveur ({ unchanged: true, serverTime }). */
+bool isUnchanged(const std::string& json, int64_t& serverTime);
 bool parseTasks(const std::string& json, Tasks& out);
 bool parseMusic(const std::string& json, Music& out);
 bool parseAlarm(const std::string& json, Alarm& out);

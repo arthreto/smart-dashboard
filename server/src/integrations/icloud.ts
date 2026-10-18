@@ -11,6 +11,10 @@ export interface AgendaEvent {
   start: string;
   end: string;
   startTs: number;
+  /** Fin (horodatage) ; absente dans les caches d'avant cette version. */
+  endTs?: number;
+  /** Jour de fin : exclusif pour un événement « journée entière ». */
+  endDate?: string;
   title: string;
   location: string;
   calendar: string;
@@ -99,6 +103,8 @@ function pushOccurrence(out: AgendaEvent[], ev: ical.VEvent, start: Date, end: D
     start: allDay ? '' : hhmm(start),
     end: allDay ? '' : hhmm(end),
     startTs: start.getTime(),
+    endTs: end.getTime(),
+    endDate: dateKey(end),
     title: (typeof ev.summary === 'string' ? ev.summary : String((ev.summary as unknown as { val?: string })?.val ?? '')) || 'Sans titre',
     location: typeof ev.location === 'string' ? ev.location : '',
     calendar: cal.name,
@@ -109,6 +115,39 @@ function pushOccurrence(out: AgendaEvent[], ev: ical.VEvent, start: Date, end: D
   });
 }
 
+/** Décalage (ms) du fuseau `tz` à l'instant `ts` : heure locale − UTC. */
+function tzOffset(ts: number, tz: string): number {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(new Date(ts));
+    const v = (t: string) => Number(parts.find((p) => p.type === t)?.value ?? 0);
+    return Date.UTC(v('year'), v('month') - 1, v('day'), v('hour'), v('minute'), v('second')) - ts;
+  } catch {
+    return -new Date(ts).getTimezoneOffset() * 60_000;
+  }
+}
+
+/**
+ * Les occurrences d'une règle de répétition avec fuseau (TZID) sont rendues « flottantes » :
+ * leurs champs UTC portent l'heure locale (9 h → 09:00Z). On les replace dans leur fuseau,
+ * sinon un rendez-vous de 9 h s'affiche à 11 h l'été et à 10 h l'hiver.
+ */
+export function floatingToDate(occ: Date, tz: string | undefined): Date {
+  if (!tz) return occ;
+  const wall = occ.getTime();
+  let ts = wall - tzOffset(wall, tz);
+  ts = wall - tzOffset(ts, tz); // second passage : changement d'heure
+  return new Date(ts);
+}
+
 function expandEvent(out: AgendaEvent[], ev: ical.VEvent, from: Date, to: Date, cal: { name: string; color: string }) {
   if (!ev.start) return;
   const start = new Date(ev.start);
@@ -117,11 +156,23 @@ function expandEvent(out: AgendaEvent[], ev: ical.VEvent, from: Date, to: Date, 
     if (start < to && start.getTime() + duration > from.getTime()) pushOccurrence(out, ev, start, new Date(start.getTime() + duration), cal, '');
     return;
   }
-  const exdates = new Set(Object.values((ev.exdate ?? {}) as Record<string, Date>).map((d) => new Date(d).toISOString().slice(0, 10)));
-  for (const occ of ev.rrule.between(new Date(from.getTime() - duration), to, true)) {
-    const day = occ.toISOString().slice(0, 10);
+  const tz = (ev.rrule.origOptions as { tzid?: string | null }).tzid ?? undefined;
+  const allDay = (ev.datetype as string) === 'date';
+  const exdates = new Set<string>();
+  for (const d of Object.values((ev.exdate ?? {}) as Record<string, Date>)) {
+    exdates.add(dateKey(new Date(d)));
+    exdates.add(new Date(d).toISOString().slice(0, 10));
+  }
+  // Marge d'un jour : les bornes sont comparées à des heures « flottantes ».
+  for (const raw of ev.rrule.between(new Date(from.getTime() - duration - 86_400_000), new Date(to.getTime() + 86_400_000), true)) {
+    // Journée entière : la date seule compte (champs UTC de l'occurrence).
+    const occ = allDay
+      ? new Date(raw.getUTCFullYear(), raw.getUTCMonth(), raw.getUTCDate())
+      : floatingToDate(raw, tz);
+    if (occ >= to || occ.getTime() + duration <= from.getTime()) continue;
+    const day = dateKey(occ);
     if (exdates.has(day)) continue;
-    const override = ev.recurrences?.[day];
+    const override = ev.recurrences?.[day] ?? ev.recurrences?.[raw.toISOString().slice(0, 10)];
     if (override) {
       if (override.start) {
         const os = new Date(override.start);
@@ -131,6 +182,19 @@ function expandEvent(out: AgendaEvent[], ev: ical.VEvent, from: Date, to: Date, 
       continue;
     }
     pushOccurrence(out, ev, occ, new Date(occ.getTime() + duration), cal, `:${day}`);
+  }
+}
+
+/** Événements d'un objet iCalendar entre `from` et `to` (répétitions développées). */
+export function eventsFromIcs(out: AgendaEvent[], data: string, from: Date, to: Date, cal: { name: string; color: string }): void {
+  let parsed: ical.CalendarResponse;
+  try {
+    parsed = ical.sync.parseICS(data);
+  } catch {
+    return;
+  }
+  for (const comp of Object.values(parsed)) {
+    if (comp && (comp as { type?: string }).type === 'VEVENT') expandEvent(out, comp as ical.VEvent, from, to, cal);
   }
 }
 
@@ -155,16 +219,7 @@ async function fetchAgenda(ctx: IntegrationContext): Promise<AgendaData> {
       timeRange: { start: from.toISOString(), end: to.toISOString() },
     });
     for (const obj of objects) {
-      if (typeof obj.data !== 'string') continue;
-      let parsed: ical.CalendarResponse;
-      try {
-        parsed = ical.sync.parseICS(obj.data);
-      } catch {
-        continue;
-      }
-      for (const comp of Object.values(parsed)) {
-        if (comp && (comp as { type?: string }).type === 'VEVENT') expandEvent(events, comp as ical.VEvent, from, to, x);
-      }
+      if (typeof obj.data === 'string') eventsFromIcs(events, obj.data, from, to, x);
     }
   }
   events.sort((a, b) => a.startTs - b.startTs);
@@ -232,25 +287,55 @@ export const icloud: IntegrationDef = {
   },
 };
 
+interface DayEvent {
+  start: string;
+  end: string;
+  title: string;
+  color: string;
+  allDay: boolean;
+}
+
+/** Part d'un événement dans une journée (événements sur plusieurs jours inclus). */
+function onDay(e: AgendaEvent, date: string): DayEvent | null {
+  if (e.allDay) {
+    const last = e.endDate && e.endDate > e.date ? e.endDate : addDays(e.date, 1); // fin exclusive
+    if (date < e.date || date >= last) return null;
+    return { start: '', end: '', title: e.title, color: e.color, allDay: true };
+  }
+  const dayStart = new Date(`${date}T00:00:00`).getTime();
+  const dayEnd = new Date(`${addDays(date, 1)}T00:00:00`).getTime();
+  const endTs = e.endTs && e.endTs > e.startTs ? e.endTs : e.startTs + 3600_000;
+  if (e.startTs >= dayEnd || endTs <= dayStart) return null;
+  return {
+    start: e.startTs < dayStart ? '00:00' : e.start,
+    end: endTs > dayEnd ? '24:00' : e.end,
+    title: e.title,
+    color: e.color,
+    allDay: false,
+  };
+}
+
 export function agendaForDevice(db: DB) {
   const data = getCache<AgendaData>(db, 'icloud')?.value;
   if (!data) return null;
   const today = dateKey();
   const now = Date.now();
-  const monday = mondayOf(today);
   const strip = ({ id, start, end, title, location, calendar, color, allDay, important, reminderMinutes }: AgendaEvent) => ({
     id, start, end, title, location, calendar, color, allDay, important, reminderMinutes,
   });
-  const todayEvents = data.events.filter((e) => e.date === today);
-  const upcoming = data.events.filter((e) => e.startTs >= now).slice(0, 5);
+  // Aujourd'hui : tout ce qui touche la journée (y compris un événement commencé la veille).
+  const todayEvents = data.events.filter((e) => onDay(e, today)).map((e) => ({ ...strip(e), date: today }));
+  const upcoming = data.events.filter((e) => e.startTs >= now).slice(0, 6);
+  // Les 7 prochains jours à partir d'aujourd'hui (la grille du calendrier n'est jamais « dans le passé »).
   const week = Array.from({ length: 7 }, (_, i) => {
-    const date = addDays(monday, i);
-    return { date, events: data.events.filter((e) => e.date === date).map(({ start, end, title, color, allDay }) => ({ start, end, title, color, allDay })) };
+    const date = addDays(today, i);
+    const events = data.events.map((e) => onDay(e, date)).filter((x): x is DayEvent => x !== null);
+    return { date, events };
   });
   const month = today.slice(0, 7);
   const monthDays = [...new Set(data.events.filter((e) => e.date.startsWith(month)).map((e) => Number(e.date.slice(8, 10))))].sort((a, b) => a - b);
   return {
-    today: todayEvents.map(strip),
+    today: todayEvents,
     upcoming: upcoming.map((e) => ({ ...strip(e), date: e.date })),
     week,
     monthDays,

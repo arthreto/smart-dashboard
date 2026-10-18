@@ -11,6 +11,7 @@ if [ ! -d node_modules/lv_font_conv ]; then
   npm init -y >/dev/null
   npm install --no-audit --no-fund lv_font_conv@1.5.3 @fontsource/figtree@5 @tabler/icons-webfont@3.49.0 >/dev/null
 fi
+[ -d node_modules/@fontsource/noto-emoji ] || npm install --no-audit --no-fund @fontsource/noto-emoji@5.3.2 >/dev/null
 FIG="node_modules/@fontsource/figtree/files"
 ICO="node_modules/@tabler/icons-webfont/dist/fonts"
 # Texte : latin + ponctuation française (’ « » … › − €) et, depuis le sous-ensemble
@@ -59,4 +60,7 @@ for s in 16 20 24 28 40; do
     -o "$OUT/icons_$s.c"
   echo "  icons_$s"
 done
+# Emojis (liste dans server/src/deviceText.ts), en secours des polices de texte.
+echo "Emojis :"
+python3 "$HERE/gen_emoji.py" "$WORK/node_modules" "$OUT"
 echo "Polices générées dans $OUT"

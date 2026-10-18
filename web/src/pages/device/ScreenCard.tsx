@@ -11,7 +11,7 @@ const THEMES: { value: Theme; label: string }[] = [
 ];
 const SCREEN_SLEEP = [15, 30, 60, 120];
 const DEEP_SLEEP = [5, 10, 30, 60];
-const POLL = [30, 60, 120, 300, 600];
+const POLL = [15, 30, 60, 120, 300];
 
 const withCurrent = (list: number[], current: number) => Array.from(new Set([...list, current])).sort((a, b) => a - b);
 
@@ -183,7 +183,11 @@ export function ScreenCard({ device, saver }: { device: DeviceInfo; saver: Setti
         <Switch checked={s.touchWake} onChange={(v) => saver.update({ touchWake: v }, { immediate: true })} label="Réveil au toucher" />
       </SettingRow>
 
-      <SettingRow label="Synchronisation" htmlFor="set-poll" sub="Fréquence à laquelle l’écran récupère les données">
+      <SettingRow
+        label="Synchronisation"
+        htmlFor="set-poll"
+        sub="Fréquence à laquelle l’écran vérifie les nouveautés (toutes les 8 s pendant la musique)"
+      >
         <select
           id="set-poll"
           className="select auto"

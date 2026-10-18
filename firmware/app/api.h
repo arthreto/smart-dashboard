@@ -29,8 +29,14 @@ void upload(const std::string& path, std::string bytes, const hal::Headers& extr
 /** En-têtes d'authentification de la tablette (Bearer). */
 hal::Headers authHeaders();
 
-/** Exécute `work` dans le thread réseau, puis `done` dans le thread de l'interface. */
-void runInWorker(std::function<void()> work, std::function<void()> done);
+/**
+ * File d'attente réseau : les requêtes de l'API (état, actions) ne patientent jamais
+ * derrière les téléchargements d'images, qui ont leurs propres threads.
+ */
+enum class Lane { Api, Images };
+
+/** Exécute `work` dans un thread réseau, puis `done` dans le thread de l'interface. */
+void runInWorker(std::function<void()> work, std::function<void()> done, Lane lane = Lane::Api);
 
 /** Échappe une chaîne pour l'insérer dans du JSON. */
 std::string jsonEscape(const std::string& s);

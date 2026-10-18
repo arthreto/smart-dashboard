@@ -30,5 +30,7 @@ std::string relativeTime(int64_t epoch);
 std::string mmss(int ms);
 /** Date « 2026-10-17 » → « mer. 21 octobre » */
 std::string shortFrenchDate(const std::string& isoDate);
+/** « Aujourd’hui », « Demain » ou « Lun. 20 » pour une date AAAA-MM-JJ. */
+std::string relativeDay(const std::string& isoDate);
 
 }  // namespace util

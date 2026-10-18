@@ -101,7 +101,7 @@ void App::loop() {
         if (++trimCounter % 60 == 0) images::trim();
     }
     if (!demo_ && api::configured() && !polling_) {
-        int interval = screenOff_ ? OFFLINE_POLL_SECONDS : std::max(15, state_.settings.pollSeconds);
+        int interval = pollInterval();
         if (lastPollMs_ == 0 || now - lastPollMs_ >= static_cast<uint32_t>(interval) * 1000u) poll();
     }
     checkPhone();
@@ -110,6 +110,16 @@ void App::loop() {
 
 void App::registerClock(lv_obj_t* label, ClockFormat fmt) {
     clocks_.push_back({label, fmt});
+    // Horloge supprimée avec sa couche (verrouillage, assistant…) sans reconstruction de
+    // l'écran : on l'oublie aussitôt, sinon la mise à jour suivante viserait un objet libéré.
+    lv_obj_add_event_cb(
+        label,
+        [](lv_event_t* e) {
+            auto& list = App::get().clocks_;
+            lv_obj_t* obj = static_cast<lv_obj_t*>(lv_event_get_target(e));
+            list.erase(std::remove_if(list.begin(), list.end(), [obj](const auto& c) { return c.first == obj; }), list.end());
+        },
+        LV_EVENT_DELETE, nullptr);
     struct tm t = util::localNow();
     lv_label_set_text(label, fmt == ClockFormat::HHMM ? util::hhmm(t).c_str() : util::longDate(t).c_str());
 }
@@ -229,18 +239,37 @@ lv_obj_t* pageHeader(lv_obj_t* parent, const std::string& title, const std::stri
 
 // ---------------------------------------------------------------- synchronisation
 
+int App::pollInterval() const {
+    if (screenOff_) return OFFLINE_POLL_SECONDS;
+    int base = std::max(15, state_.settings.pollSeconds);
+    // Musique en cours et visible : morceau suivant, pause… affichés en quelques secondes.
+    // (Ces synchros sont légères : le serveur répond « rien n'a changé » la plupart du temps.)
+    bool musicVisible = screen_ == Screen::Music || screen_ == Screen::Home;
+    if (musicVisible && state_.music.available && (state_.music.isPlaying || screen_ == Screen::Music)) return std::min(base, 8);
+    return base;
+}
+
 void App::poll() {
     if (demo_ || !api::configured() || polling_) return;
     polling_ = true;
     lastPollMs_ = hal::get().millis();
-    api::request("GET", "/api/v1/state", "", [this](const hal::HttpResponse& r) {
+    std::string path = "/api/v1/state";
+    if (!state_.stateHash.empty()) path += "?known=" + state_.stateHash;
+    api::request("GET", path, "", [this](const hal::HttpResponse& r) {
         polling_ = false;
         if (r.status == 200) {
             online_ = true;
             lastError_.clear();
             lastSync_ = time(nullptr);
-            applyState(r.body, false);
-            heartbeat();
+            int64_t serverTime = 0;
+            if (isUnchanged(r.body, serverTime)) {
+                // Rien de neuf : pas de redessin, juste l'heure (et un signe de vie par minute).
+                if (serverTime > 0) hal::get().syncTime(serverTime);
+                if (!ackCommands_.empty() || hal::get().millis() - lastHeartbeatMs_ > 60000u) heartbeat();
+            } else {
+                applyState(r.body, false);
+                heartbeat();
+            }
         } else if (r.status == 401) {
             online_ = false;
             lastError_ = "Appairage requis : le jeton a été révoqué.";
@@ -281,6 +310,7 @@ void App::applyState(const std::string& json, bool fromCache) {
 
 void App::heartbeat() {
     if (demo_ || !api::configured()) return;
+    lastHeartbeatMs_ = hal::get().millis();
     hal::PowerStatus p = hal::get().power();
     std::string acks;
     for (size_t i = 0; i < ackCommands_.size(); i++) acks += (i ? "," : "") + std::to_string(ackCommands_[i]);

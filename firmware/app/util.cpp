@@ -155,4 +155,25 @@ std::string shortFrenchDate(const std::string& iso) {
     return wd + ". " + std::to_string(d) + " " + monthName(mo - 1);
 }
 
+std::string relativeDay(const std::string& iso) {
+    int y = 0, mo = 0, d = 0;
+    if (sscanf(iso.c_str(), "%d-%d-%d", &y, &mo, &d) != 3) return "";
+    struct tm t{};
+    t.tm_year = y - 1900;
+    t.tm_mon = mo - 1;
+    t.tm_mday = d;
+    t.tm_hour = 12;
+    t.tm_isdst = -1;
+    mktime(&t);
+    struct tm now = localNow();
+    now.tm_hour = 12;
+    now.tm_min = now.tm_sec = 0;
+    now.tm_isdst = -1;
+    time_t a = mktime(&now), b = mktime(&t);
+    long diff = static_cast<long>((b - a + 43200) / 86400);
+    if (diff == 0) return "Aujourd’hui";
+    if (diff == 1) return "Demain";
+    return weekdayName(t.tm_wday, true).substr(0, 3) + ". " + std::to_string(d);
+}
+
 }  // namespace util

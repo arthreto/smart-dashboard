@@ -23,8 +23,17 @@ import { isAllowedImage, processImage, rgb565ToJpeg } from '../images.js';
 import { logEvent } from '../events.js';
 import { HttpError } from '../http.js';
 import { household, householdActive } from '../households.js';
+import { deviceSafe } from '../deviceText.js';
+import { sha256 } from '../crypto.js';
 
 type Body = Record<string, unknown>;
+
+/** Empreinte de l'état, sans ce qui change à chaque requête (heure, avancement du morceau). */
+function hashState(state: Record<string, unknown>): string {
+  return sha256(
+    JSON.stringify(state, (k, v) => (k === 'serverTime' || k === 'progressMs' ? undefined : v)),
+  ).slice(0, 16);
+}
 
 // Codes d'appairage : 6 chiffres partagés par tous les foyers. En plus de la limite par
 // adresse, un plafond global d'échecs empêche de les deviner depuis de nombreuses adresses.
@@ -77,7 +86,14 @@ export function deviceRoutes(app: FastifyInstance, mainDb: DB): void {
     return { token: res.token };
   });
 
-  app.get('/api/v1/state', dev, async (req) => buildDeviceState(req.device!));
+  // État complet de l'écran. `?known=<stateHash>` : si rien n'a changé depuis, réponse
+  // courte { unchanged: true } (l'écran n'a ni à tout relire ni à redessiner).
+  app.get('/api/v1/state', dev, async (req) => {
+    const state = deviceSafe(await buildDeviceState(req.device!));
+    const stateHash = hashState(state);
+    if ((req.query as { known?: string }).known === stateHash) return { unchanged: true, serverTime: state.serverTime, stateHash };
+    return { ...state, stateHash };
+  });
 
   app.post('/api/v1/heartbeat', dev, async (req) => {
     recordHeartbeat(req.device!, (req.body ?? {}) as Body, req.ip);
@@ -96,7 +112,7 @@ export function deviceRoutes(app: FastifyInstance, mainDb: DB): void {
     const { done } = (req.body ?? {}) as Body;
     const target = typeof done === 'boolean' ? done : !book.isDone(habit, book.today);
     setHabitDone(db, id, book.today, target);
-    return tasksForDevice(db);
+    return deviceSafe(tasksForDevice(db));
   });
 
   app.patch('/api/v1/alarms/:id', dev, async (req, reply) => {
@@ -115,7 +131,7 @@ export function deviceRoutes(app: FastifyInstance, mainDb: DB): void {
     const missing = getDef('spotify')!.missing(ctx);
     if (missing) throw new HttpError(409, '', missing);
     const { action } = req.params as { action: string };
-    return control(ctx, action, ((req.body ?? {}) as Body).value);
+    return deviceSafe(await control(ctx, action, ((req.body ?? {}) as Body).value));
   });
 
   app.post('/api/v1/cinema/notify/:id', dev, async (req) => {

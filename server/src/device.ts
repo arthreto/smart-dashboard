@@ -45,7 +45,7 @@ export const DEFAULT_DISPLAY: DisplaySettings = {
   touchWake: true,
   lockOnWake: true,
   lockAfterMinutes: 5,
-  pollSeconds: 60,
+  pollSeconds: 30,
 };
 
 const HM = /^([01]\d|2[0-3]):[0-5]\d$/;

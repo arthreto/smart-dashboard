@@ -190,7 +190,7 @@ Objet **Integration** :
 | Méthode | Route | Corps | Réponse |
 |---|---|---|---|
 | POST | `/api/v1/pair` | `{ code, name?, firmware? }` (sans jeton, 5 essais / 10 min) | `{ token }` |
-| GET | `/api/v1/state` | — | **DeviceState** (ci-dessous) |
+| GET | `/api/v1/state?known=<stateHash>` | — | **DeviceState** (ci-dessous), ou `{ unchanged: true, serverTime, stateHash }` si l'état n'a pas changé depuis `known` |
 | POST | `/api/v1/heartbeat` | `{ battery, charging, firmware, rssi, ip, screen, ackCommands: [id] }` | `{ ok: true }` |
 | POST | `/api/v1/habits/:id/toggle` | `{ done }` | `tasks` (même forme que dans DeviceState) |
 | PATCH | `/api/v1/alarms/:id` | `{ enabled }` (réveil de cet écran uniquement) | `Alarm` |
@@ -240,5 +240,11 @@ Objet **Integration** :
 ```
 
 `alarms`, `nextAlarm`, `routine`, `layout`, `settings` et `commands` sont ceux de l'écran qui fait la requête ; le reste est commun au foyer.
+
+`stateHash` : empreinte de l'état (sans `serverTime` ni l'avancement du morceau). L'écran la renvoie dans `?known=` : tant que rien ne change, la réponse est courte et l'écran ne redessine rien.
+
+`agenda.week` : aujourd'hui puis les 6 jours suivants (`date` de chaque jour fournie) ; un événement sur plusieurs jours apparaît dans chacun d'eux (`start` à `00:00`, `end` à `24:00` aux jours intermédiaires).
+
+Textes : les polices de l'écran contiennent l'alphabet latin et une sélection d'emojis (liste dans `server/src/deviceText.ts`). Le serveur retire le reste avant l'envoi (drapeaux, tons de peau, emojis composés réduits au premier, autres alphabets).
 
 Les URL d'images commençant par `/` sont relatives à l'adresse du serveur.

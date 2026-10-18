@@ -16,13 +16,16 @@ struct Job {
     std::function<void()> done;
 };
 
-// État partagé avec le thread réseau. Alloué une fois et jamais détruit : le thread
-// est détaché et peut encore attendre sur la variable de condition quand le
+constexpr int LANES = 2;
+constexpr int IMAGE_THREADS = 2;
+
+// État partagé avec les threads réseau. Alloué une fois et jamais détruit : les threads
+// sont détachés et peuvent encore attendre sur une variable de condition quand le
 // programme se termine (la détruire à ce moment-là bloquerait la sortie).
 struct Shared {
     std::mutex mutex;
-    std::condition_variable cv;
-    std::deque<Job> jobs;
+    std::condition_variable cv[LANES];
+    std::deque<Job> jobs[LANES];
     std::deque<std::function<void()>> done;
     std::string base;
     std::string token;
@@ -34,14 +37,14 @@ Shared& S() {
     return *s;
 }
 
-void worker() {
+void worker(int lane) {
     for (;;) {
         Job job;
         {
             std::unique_lock<std::mutex> lock(S().mutex);
-            S().cv.wait(lock, [] { return !S().jobs.empty(); });
-            job = std::move(S().jobs.front());
-            S().jobs.pop_front();
+            S().cv[lane].wait(lock, [lane] { return !S().jobs[lane].empty(); });
+            job = std::move(S().jobs[lane].front());
+            S().jobs[lane].pop_front();
         }
         if (job.work) job.work();
         if (job.done) {
@@ -56,7 +59,8 @@ void worker() {
 void start() {
     if (S().started) return;
     S().started = true;
-    std::thread(worker).detach();
+    std::thread(worker, static_cast<int>(Lane::Api)).detach();
+    for (int i = 0; i < IMAGE_THREADS; i++) std::thread(worker, static_cast<int>(Lane::Images)).detach();
 }
 
 void pump() {
@@ -97,12 +101,13 @@ hal::Headers authHeaders() {
     return h;
 }
 
-void runInWorker(std::function<void()> work, std::function<void()> done) {
+void runInWorker(std::function<void()> work, std::function<void()> done, Lane lane) {
+    int i = static_cast<int>(lane);
     {
         std::lock_guard<std::mutex> lock(S().mutex);
-        S().jobs.push_back({std::move(work), std::move(done)});
+        S().jobs[i].push_back({std::move(work), std::move(done)});
     }
-    S().cv.notify_one();
+    S().cv[i].notify_one();
 }
 
 void request(const std::string& method, const std::string& path, const std::string& jsonBody, Callback cb, bool auth, int timeoutMs) {

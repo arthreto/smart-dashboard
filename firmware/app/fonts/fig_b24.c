@@ -5739,6 +5739,9 @@ static lv_font_fmt_txt_dsc_t font_dsc = {
  *----------------*/
 
 /*Initialize a public general font descriptor*/
+
+extern const lv_font_t emoji_24;
+
 #if LVGL_VERSION_MAJOR >= 8
 const lv_font_t fig_b24 = {
 #else
@@ -5757,7 +5760,7 @@ lv_font_t fig_b24 = {
 #endif
     .dsc = &font_dsc,          /*The custom font data. Will be accessed by `get_glyph_bitmap/dsc` */
 #if LV_VERSION_CHECK(8, 2, 0) || LVGL_VERSION_MAJOR >= 9
-    .fallback = NULL,
+    .fallback = &emoji_24,
 #endif
     .user_data = NULL,
 };

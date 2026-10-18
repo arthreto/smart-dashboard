@@ -196,17 +196,21 @@ void musicWidget(lv_obj_t* cell) {
 }
 
 void agendaRow(lv_obj_t* parent, const Event& e, bool first, const std::string& badge) {
-    lv_obj_t* r = row(parent, 18);
+    lv_obj_t* r = row(parent, 16);
     lv_obj_set_size(r, lv_pct(100), 82);
     if (!first) {
         lv_obj_set_style_border_side(r, LV_BORDER_SIDE_TOP, 0);
         lv_obj_set_style_border_width(r, 1, 0);
         lv_obj_set_style_border_color(r, th().hairline, 0);
     }
-    lv_obj_t* times = col(r, 2);
-    lv_obj_set_width(times, 64);
-    label(times, e.allDay ? "Jour" : e.start, &fig_s18, th().text);
-    label(times, e.allDay ? "entier" : e.end, &fig_m14, th().text2);
+    // Jour, puis heure : on sait toujours de quand on parle.
+    lv_obj_t* times = col(r, 1);
+    lv_obj_set_width(times, 96);
+    std::string day = util::relativeDay(e.date);
+    bool isToday = day == "Aujourd’hui";
+    label(times, day.empty() ? " " : day, &fig_s14, isToday ? (th().dark ? lv_color_hex(0xFF6961) : lv_color_hex(0xD70015)) : th().text2);
+    label(times, e.allDay ? "Journée" : e.start, &fig_s18, th().text);
+    if (!e.allDay && !e.end.empty()) label(times, e.end, &fig_m14, th().text3);
     dot(r, 10, hex(e.color));
     lv_obj_t* txt = col(r, 2);
     lv_obj_set_flex_grow(txt, 1);
@@ -232,14 +236,34 @@ void agendaWidget(lv_obj_t* cell) {
     lv_obj_t* head = row(c, 10);
     lv_obj_set_width(head, lv_pct(100));
     label(head, "Agenda", &fig_s20, th().text);
-    std::vector<Event> list = a.today;
-    bool future = false;
-    if (list.empty() && !a.upcoming.empty()) {
-        list = a.upcoming;
-        future = true;
+
+    struct tm now = util::localNow();
+    int nowMin = now.tm_hour * 60 + now.tm_min;
+    char todayKey[11];
+    strftime(todayKey, sizeof todayKey, "%Y-%m-%d", &now);
+
+    // Ce qui est en cours aujourd'hui, puis les prochains événements (aujourd'hui ou plus tard).
+    std::vector<Event> list;
+    auto has = [&](const Event& e) {
+        return std::any_of(list.begin(), list.end(), [&](const Event& x) { return !e.id.empty() && x.id == e.id; });
+    };
+    for (Event e : a.today) {
+        if (e.date.empty()) e.date = todayKey;
+        int st = util::minutesOf(e.start), en = util::minutesOf(e.end);
+        bool ongoing = e.allDay || (st >= 0 && st <= nowMin && (en < 0 || en > nowMin || en <= st));
+        if (ongoing) list.push_back(e);
     }
-    label(head, a.valid ? (future ? "Prochainement" : std::to_string(a.today.size()) + " événement" + (a.today.size() > 1 ? "s" : "")) : "",
-          &fig_m16, th().text2);
+    for (const Event& e : a.upcoming) if (!has(e)) list.push_back(e);
+    if (list.empty()) {
+        // Ancien serveur (sans « upcoming » complet) : les événements du jour encore à venir.
+        for (Event e : a.today) {
+            if (e.date.empty()) e.date = todayKey;
+            if (e.allDay || util::minutesOf(e.start) >= nowMin) list.push_back(e);
+        }
+    }
+
+    size_t todayCount = a.today.size();
+    label(head, a.valid ? (todayCount ? std::to_string(todayCount) + " aujourd’hui" : "À venir") : "", &fig_m16, th().text2);
     spacer(head);
     lv_obj_t* link = row(head, 4);
     label(link, "Calendrier", &fig_s16, th().dark ? lv_color_hex(0xFF6961) : lv_color_hex(0xD70015));
@@ -254,21 +278,20 @@ void agendaWidget(lv_obj_t* cell) {
         return;
     }
     if (list.empty()) {
-        label(c, "Rien de prévu aujourd’hui.", &fig_m16, th().text2);
+        label(c, "Rien de prévu pour le moment.", &fig_m16, th().text2);
         return;
     }
-    struct tm now = util::localNow();
-    int nowMin = now.tm_hour * 60 + now.tm_min;
     bool badgeDone = false;
     for (size_t i = 0; i < list.size() && i < 3; i++) {
         std::string badge;
         int st = util::minutesOf(list[i].start);
-        if (!badgeDone && !future && st > nowMin) {
+        if (!badgeDone && list[i].date == todayKey && !list[i].allDay && st > nowMin) {
             badge = util::inDelay(static_cast<int64_t>(st - nowMin) * 60);
             badge[0] = 'D';
             badgeDone = true;
+        } else if (!badgeDone && list[i].date == todayKey && !list[i].allDay && st >= 0 && st <= nowMin) {
+            badge = "En cours";
         }
-        if (future && i == 0) badge = util::shortFrenchDate(list[i].date);
         agendaRow(c, list[i], i == 0, badge);
     }
 }

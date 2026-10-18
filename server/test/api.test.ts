@@ -472,6 +472,66 @@ test('journaux et limites : jetons masqués, préfixe IPv6 /64', async () => {
   assert.equal(rateLimitKey('2001:db8::1'), '2001:db8:0:0::/64');
 });
 
+test('écran : textes simplifiés (emojis) et réponse « rien n’a changé »', async () => {
+  const { deviceText } = await import('../src/deviceText.js');
+  assert.equal(deviceText('🎂 Anniversaire de Léa'), '🎂 Anniversaire de Léa');
+  assert.equal(deviceText('❤️ Soirée'), '❤ Soirée');
+  assert.equal(deviceText('👨‍👩‍👧 Famille'), '👨 Famille');
+  assert.equal(deviceText('👍🏽 OK'), '👍 OK');
+  assert.equal(deviceText('🇫🇷 Match'), 'Match');
+  assert.equal(deviceText('🦖 Dino'), 'Dino');
+  assert.equal(deviceText('Ștefan'), 'Stefan');
+
+  let res = await app.inject({ method: 'GET', url: '/api/v1/state', headers: bearer(tok1) });
+  const hash = res.json().stateHash as string;
+  assert.match(hash, /^[0-9a-f]{16}$/);
+  res = await app.inject({ method: 'GET', url: `/api/v1/state?known=${hash}`, headers: bearer(tok1) });
+  assert.equal(res.json().unchanged, true);
+  assert.ok(res.json().serverTime > 0);
+  // Une tâche cochée : l'état change, l'écran reçoit tout.
+  const items = (await app.inject({ method: 'GET', url: '/api/v1/state', headers: bearer(tok1) })).json().tasks.items;
+  await app.inject({ method: 'POST', url: `/api/v1/habits/${items[0].id}/toggle`, headers: bearer(tok1), payload: {} });
+  res = await app.inject({ method: 'GET', url: `/api/v1/state?known=${hash}`, headers: bearer(tok1) });
+  assert.equal(res.json().unchanged, undefined);
+  assert.notEqual(res.json().stateHash, hash);
+  await app.inject({ method: 'POST', url: `/api/v1/habits/${items[0].id}/toggle`, headers: bearer(tok1), payload: {} });
+});
+
+test('agenda iCloud : répétitions à la bonne heure, journées entières sur plusieurs jours, 7 jours glissants', async () => {
+  const { eventsFromIcs, agendaForDevice, floatingToDate } = await import('../src/integrations/icloud.js');
+  const { setCache } = await import('../src/db.js');
+  const { dateKey, addDays } = await import('../src/dates.js');
+  const tz = 'BEGIN:VTIMEZONE\nTZID:Europe/Paris\nBEGIN:DAYLIGHT\nTZOFFSETFROM:+0100\nTZOFFSETTO:+0200\nDTSTART:19810329T020000\nRRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU\nEND:DAYLIGHT\nBEGIN:STANDARD\nTZOFFSETFROM:+0200\nTZOFFSETTO:+0100\nDTSTART:19961027T030000\nRRULE:FREQ=YEARLY;BYMONTH=10;BYDAY=-1SU\nEND:STANDARD\nEND:VTIMEZONE';
+  const cal = (body: string) => `BEGIN:VCALENDAR\nVERSION:2.0\n${tz}\nBEGIN:VEVENT\n${body}\nEND:VEVENT\nEND:VCALENDAR`;
+  const cals = { name: 'Perso', color: '#FF9F0A' };
+
+  // Hebdomadaire à 9 h, de part et d'autre du passage à l'heure d'hiver (25 octobre 2026).
+  const out: import('../src/integrations/icloud.js').AgendaEvent[] = [];
+  eventsFromIcs(out, cal('UID:w\nDTSTART;TZID=Europe/Paris:20261019T090000\nDTEND;TZID=Europe/Paris:20261019T100000\nRRULE:FREQ=WEEKLY\nSUMMARY:Hebdo'), new Date('2026-10-18T00:00:00'), new Date('2026-11-10T00:00:00'), cals);
+  assert.deepEqual(out.map((e) => `${e.date} ${e.start}`), ['2026-10-19 09:00', '2026-10-26 09:00', '2026-11-02 09:00', '2026-11-09 09:00']);
+  assert.equal(floatingToDate(new Date('2026-07-01T09:00:00Z'), 'Europe/Paris').toISOString(), '2026-07-01T07:00:00.000Z');
+
+  // Semaine glissante et journée entière sur 3 jours.
+  const today = dateKey();
+  const d = (n: number) => addDays(today, n).replace(/-/g, '');
+  const ev2: import('../src/integrations/icloud.js').AgendaEvent[] = [];
+  const from = new Date(`${addDays(today, -1)}T00:00:00`);
+  const to = new Date(`${addDays(today, 30)}T00:00:00`);
+  eventsFromIcs(ev2, cal(`UID:a\nDTSTART;VALUE=DATE:${d(1)}\nDTEND;VALUE=DATE:${d(4)}\nSUMMARY:Vacances`), from, to, cals);
+  eventsFromIcs(ev2, cal(`UID:n\nDTSTART;TZID=Europe/Paris:${d(0)}T230000\nDTEND;TZID=Europe/Paris:${d(1)}T010000\nSUMMARY:Nuit`), from, to, cals);
+  const hdb = openDb(':memory:');
+  setCache(hdb, 'icloud', { events: ev2, calendars: [], updatedAt: new Date().toISOString() });
+  const ag = agendaForDevice(hdb)!;
+  assert.equal(ag.week[0].date, today, 'la grille commence aujourd’hui');
+  assert.equal(ag.week.length, 7);
+  const titles = (i: number) => ag.week[i].events.map((e) => `${e.title}${e.allDay ? '' : ` ${e.start}-${e.end}`}`);
+  assert.deepEqual(titles(0), ['Nuit 23:00-24:00']);
+  assert.deepEqual(titles(1), ['Vacances', 'Nuit 00:00-01:00']);
+  assert.deepEqual(titles(3), ['Vacances']);
+  assert.deepEqual(titles(4), []);
+  assert.equal(ag.today[0].date, today);
+});
+
 test('séries avec jokers', async () => {
   // Base isolée : 1 habitude quotidienne créée il y a 20 jours.
   const d2 = openDb(':memory:');

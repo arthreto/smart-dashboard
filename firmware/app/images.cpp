@@ -1,6 +1,7 @@
 #include "images.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <functional>
 #include <list>
@@ -18,6 +19,7 @@ namespace {
 
 constexpr size_t MAX_ENTRIES = 48;
 constexpr size_t WORKBUF = 4096;
+constexpr uint32_t RETRY_MS = 20000;  // une image en échec est redemandée après ce délai
 
 struct Entry {
     lv_image_dsc_t dsc{};
@@ -25,9 +27,13 @@ struct Entry {
     bool ready = false;
     bool failed = false;
     bool loading = false;
+    uint32_t failedAt = 0;
     int users = 0;
     uint32_t lastUse = 0;
     std::list<lv_obj_t*> waiters;
+    // Encore attendue par un écran ? (lu par le thread réseau : inutile de télécharger
+    // les affiches d'une page qu'on vient de quitter).
+    std::shared_ptr<std::atomic<bool>> wanted = std::make_shared<std::atomic<bool>>(true);
 };
 
 std::map<std::string, std::unique_ptr<Entry>> g_cache;
@@ -81,6 +87,15 @@ bool decodeJpeg(const std::string& jpg, int& w, int& h, std::vector<uint8_t>& ou
 void attach(lv_obj_t* frame, Entry* e) {
     lv_obj_t* img = lv_image_create(frame);
     lv_image_set_src(img, &e->dsc);
+    // L'image remplit tout le cadre (comme « cover ») même si sa taille diffère : sinon une
+    // pochette de 420 px dans un cadre de 72 px n'en montrerait que le centre.
+    int fw = lv_obj_get_style_width(frame, LV_PART_MAIN), fh = lv_obj_get_style_height(frame, LV_PART_MAIN);
+    int iw = e->dsc.header.w, ih = e->dsc.header.h;
+    if (fw > 0 && fh > 0 && iw > 0 && ih > 0 && (iw != fw || ih != fh)) {
+        int scale = std::max(fw * 256 / iw, fh * 256 / ih) + 1;
+        lv_image_set_pivot(img, iw / 2, ih / 2);
+        lv_image_set_scale(img, static_cast<uint32_t>(scale));
+    }
     lv_obj_center(img);
     e->users++;
     e->lastUse = hal::get().millis();
@@ -99,17 +114,34 @@ void load(const std::string& url, Entry* e) {
     auto pixels = std::make_shared<std::vector<uint8_t>>();
     auto size = std::make_shared<std::pair<int, int>>(0, 0);
     auto ok = std::make_shared<bool>(false);
+    auto skipped = std::make_shared<bool>(false);
+    auto wanted = e->wanted;
     std::string full = api::resolve(url);
     hal::Headers headers = api::authHeaders();
     api::runInWorker(
         [=]() {
-            *jpg = hal::get().http("GET", full, "", headers, 20000);
-            if (jpg->status == 200 && !jpg->body.empty()) *ok = decodeJpeg(jpg->body, size->first, size->second, *pixels);
+            if (!wanted->load()) {
+                *skipped = true;
+                return;
+            }
+            // Deux essais : une première demande peut expirer pendant que le serveur
+            // télécharge et redimensionne l'image d'origine (ensuite elle est en cache).
+            for (int attempt = 0; attempt < 2 && !*ok; attempt++) {
+                *jpg = hal::get().http("GET", full, "", headers, 25000);
+                if (jpg->status == 200 && !jpg->body.empty()) *ok = decodeJpeg(jpg->body, size->first, size->second, *pixels);
+                if (jpg->status == 404 || jpg->status == 400) break;  // inutile d'insister
+            }
         },
         [=]() {
             e->loading = false;
+            if (*skipped) {
+                // Abandonnée faute de spectateur… sauf si un écran l'a redemandée entre-temps.
+                if (!e->waiters.empty()) load(url, e);
+                return;
+            }
             if (!*ok) {
                 e->failed = true;
+                e->failedAt = hal::get().millis();
                 e->waiters.clear();
                 return;
             }
@@ -125,12 +157,30 @@ void load(const std::string& url, Entry* e) {
             e->ready = true;
             for (lv_obj_t* frame : e->waiters) attach(frame, e);
             e->waiters.clear();
-        });
+        },
+        api::Lane::Images);
+}
+
+/**
+ * Images passant par le serveur (/api/v1/image?…&w=…&h=…) : on demande directement la
+ * taille du cadre, recadrée par le serveur. Image nette, légère, sans mise à l'échelle.
+ */
+std::string sizedUrl(const std::string& url, int w, int h) {
+    if (url.find("/api/v1/image?") == std::string::npos) return url;
+    auto setParam = [](std::string u, const std::string& key, int value) {
+        std::string k = "&" + key + "=";
+        size_t p = u.find(k);
+        if (p == std::string::npos) return u + k + std::to_string(value);
+        size_t end = u.find('&', p + k.size());
+        return u.substr(0, p + k.size()) + std::to_string(value) + (end == std::string::npos ? "" : u.substr(end));
+    };
+    return setParam(setParam(url, "w", std::min(w, 640)), "h", std::min(h, 640));
 }
 
 }  // namespace
 
-lv_obj_t* create(lv_obj_t* parent, const std::string& url, int w, int h, int radius, lv_color_t placeholder) {
+lv_obj_t* create(lv_obj_t* parent, const std::string& rawUrl, int w, int h, int radius, lv_color_t placeholder) {
+    const std::string url = sizedUrl(rawUrl, w, h);
     lv_obj_t* frame = lv_obj_create(parent);
     lv_obj_remove_style_all(frame);
     lv_obj_clear_flag(frame, LV_OBJ_FLAG_SCROLLABLE);
@@ -145,15 +195,18 @@ lv_obj_t* create(lv_obj_t* parent, const std::string& url, int w, int h, int rad
     auto& slot = g_cache[url];
     if (!slot) slot = std::make_unique<Entry>();
     Entry* e = slot.get();
+    if (e->failed && hal::get().millis() - e->failedAt > RETRY_MS) e->failed = false;  // nouvel essai
     if (e->ready) {
         attach(frame, e);
     } else if (!e->failed) {
         e->waiters.push_back(frame);
+        e->wanted->store(true);
         lv_obj_add_event_cb(
             frame,
             [](lv_event_t* ev) {
                 auto* entry = static_cast<Entry*>(lv_event_get_user_data(ev));
                 entry->waiters.remove(static_cast<lv_obj_t*>(lv_event_get_target(ev)));
+                if (entry->waiters.empty() && !entry->ready) entry->wanted->store(false);
             },
             LV_EVENT_DELETE, e);
         if (!e->loading) load(url, e);
