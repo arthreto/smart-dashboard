@@ -36,6 +36,9 @@ export function household(id: number): DB {
   if (!Number.isInteger(id) || id <= 0) throw new Error(`Foyer invalide : ${id}`);
   let db = pool.get(id);
   if (!db) {
+    // Un foyer supprimé ne doit pas renaître sous forme de base vide (tâche en cours, retour OAuth…).
+    const m = mainOrNull();
+    if (m && !m.prepare('SELECT 1 FROM households WHERE id = ?').get(id)) throw new Error(`Foyer introuvable : ${id}`);
     db = openDb(householdFile(id));
     pool.set(id, db);
     idOf.set(db, id);
@@ -69,6 +72,19 @@ export function createHousehold(name: string): number {
   const id = Number(res.lastInsertRowid);
   seedDefaults(household(id));
   return id;
+}
+
+/**
+ * Foyer utilisable : faux si tous ses comptes ont été désactivés par l'administrateur
+ * (ses écrans et ses services s'arrêtent alors aussi). Un foyer sans compte (reprise de
+ * l'ancienne version avant la création de l'administrateur) reste actif.
+ */
+export function householdActive(id: number): boolean {
+  const r = main().prepare('SELECT COUNT(*) AS n, SUM(CASE WHEN disabled = 0 THEN 1 ELSE 0 END) AS active FROM users WHERE household_id = ?').get(id) as {
+    n: number;
+    active: number | null;
+  };
+  return r.n === 0 || (r.active ?? 0) > 0;
 }
 
 export function renameHousehold(id: number, name: string): void {

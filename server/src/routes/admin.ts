@@ -26,6 +26,10 @@ function userParam(db: DB, params: unknown): UserRow {
   return u;
 }
 
+function activeAdmins(db: DB): number {
+  return (db.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND disabled = 0").get() as { n: number }).n;
+}
+
 function serviceParam(params: unknown): ServiceId {
   const id = (params as { id: string }).id as ServiceId;
   if (!SERVICE_IDS.includes(id)) throw new NotFoundError('Service inconnu.');
@@ -92,19 +96,30 @@ export function adminRoutes(app: FastifyInstance, db: DB): void {
   app.patch('/api/admin/users/:id', admin, async (req, reply) => {
     const u = userParam(db, req.params);
     const { disabled, role } = (req.body ?? {}) as Body;
+    // Tout est vérifié avant la moindre écriture.
+    if (disabled !== undefined && typeof disabled !== 'boolean') throw new ValidationError('« disabled » doit être un booléen.');
+    if (role !== undefined && role !== 'admin' && role !== 'user') throw new ValidationError('Rôle inconnu.');
     if (u.id === req.user!.id && (disabled === true || role === 'user')) {
       return reply.code(400).send({ error: 'self', message: 'Tu ne peux pas désactiver ton propre compte ni te retirer le rôle d’administrateur.' });
     }
-    if (disabled !== undefined) {
-      db.prepare('UPDATE users SET disabled = ? WHERE id = ?').run(disabled ? 1 : 0, u.id);
-      if (disabled) deleteUserSessions(db, u.id);
-      logEvent(db, 'admin', 'warning', `Compte « ${u.login} » ${disabled ? 'désactivé' : 'réactivé'}`);
+    const losesAdmin = u.role === 'admin' && !u.disabled && (disabled === true || role === 'user');
+    if (losesAdmin && activeAdmins(db) <= 1) {
+      return reply.code(400).send({ error: 'last_admin', message: 'Il doit rester au moins un administrateur actif.' });
     }
-    if (role !== undefined) {
-      if (role !== 'admin' && role !== 'user') throw new ValidationError('Rôle inconnu.');
-      db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, u.id);
-      logEvent(db, 'admin', 'warning', `Compte « ${u.login} » : rôle ${role === 'admin' ? 'administrateur' : 'utilisateur'}`);
-    }
+    db.transaction(() => {
+      if (disabled !== undefined && disabled !== !!u.disabled) {
+        db.prepare('UPDATE users SET disabled = ? WHERE id = ?').run(disabled ? 1 : 0, u.id);
+        if (disabled) {
+          deleteUserSessions(db, u.id);
+          db.prepare("DELETE FROM invites WHERE kind = 'reset' AND user_id = ? AND used_at IS NULL").run(u.id);
+        }
+        logEvent(db, 'admin', 'warning', `Compte « ${u.login} » ${disabled ? 'désactivé' : 'réactivé'}`);
+      }
+      if (role !== undefined && role !== u.role) {
+        db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, u.id);
+        logEvent(db, 'admin', 'warning', `Compte « ${u.login} » : rôle ${role === 'admin' ? 'administrateur' : 'utilisateur'}`);
+      }
+    })();
     return { ok: true };
   });
 
@@ -112,6 +127,9 @@ export function adminRoutes(app: FastifyInstance, db: DB): void {
   app.delete('/api/admin/users/:id', admin, async (req, reply) => {
     const u = userParam(db, req.params);
     if (u.id === req.user!.id) return reply.code(400).send({ error: 'self', message: 'Tu ne peux pas supprimer ton propre compte.' });
+    if (u.role === 'admin' && !u.disabled && activeAdmins(db) <= 1) {
+      return reply.code(400).send({ error: 'last_admin', message: 'Il doit rester au moins un administrateur actif.' });
+    }
     const others = (db.prepare('SELECT COUNT(*) AS n FROM users WHERE household_id = ? AND id != ?').get(u.household_id, u.id) as { n: number }).n;
     if (others === 0) {
       removeHouseholdDeviceFiles(u.household_id);

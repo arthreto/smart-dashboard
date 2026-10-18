@@ -16,6 +16,7 @@ export interface FetchOptions {
   headers?: Record<string, string>;
   body?: string | URLSearchParams;
   timeoutMs?: number;
+  redirect?: 'follow' | 'manual';
 }
 
 export async function fetchRaw(url: string, opts: FetchOptions = {}): Promise<Response> {
@@ -25,7 +26,7 @@ export async function fetchRaw(url: string, opts: FetchOptions = {}): Promise<Re
       headers: opts.headers,
       body: opts.body,
       signal: AbortSignal.timeout(opts.timeoutMs ?? 15_000),
-      redirect: 'follow',
+      redirect: opts.redirect ?? 'follow',
     });
   } catch (err) {
     // Erreur réseau (DNS, connexion refusée, délai) : message lisible plutôt qu'une erreur 500.

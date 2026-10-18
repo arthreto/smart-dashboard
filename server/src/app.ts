@@ -6,7 +6,7 @@ import rateLimit from '@fastify/rate-limit';
 import fastifyStatic from '@fastify/static';
 import type { DB } from './db.js';
 import { config } from './config.js';
-import { SESSION_COOKIE, findSession } from './auth.js';
+import { AuthError, SESSION_COOKIE, findSession } from './auth.js';
 import { ValidationError } from './habits.js';
 import { ConfigError } from './integrations/types.js';
 import { HttpError, NotFoundError } from './http.js';
@@ -17,16 +17,45 @@ import { deviceRoutes } from './routes/device.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+/** Adresse sans les jetons qu'elle peut contenir (liens d'invitation, retour OAuth) : pour les journaux. */
+export function safeUrl(url: string): string {
+  return url.replace(/^(\/api\/invites\/)[^/?]+/, '$1…').replace(/\?.*$/, (q) => (q.length > 1 ? '?…' : ''));
+}
+
+/**
+ * Clé des limites de tentatives : l'adresse IPv4, ou le préfixe /64 d'une adresse IPv6
+ * (un seul abonné dispose souvent de milliards d'adresses dans son /64).
+ */
+export function rateLimitKey(ip: string): string {
+  const v4 = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+  if (v4) return v4[1];
+  if (!ip.includes(':')) return ip;
+  const [head, tail = ''] = ip.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail ? tail.split(':') : [];
+  const full = ip.includes('::') ? [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t] : h;
+  return `${full.slice(0, 4).map((x) => x.toLowerCase()).join(':')}::/64`;
+}
+
 /** `db` est la base principale (comptes, foyers, écrans) ; voir households.ts pour les foyers. */
 export async function buildApp(db: DB, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const app = Fastify({
-    logger: opts.logger === false ? false : { level: config.logLevel, redact: ['req.headers.authorization', 'req.headers.cookie'] },
+    logger:
+      opts.logger === false
+        ? false
+        : {
+            level: config.logLevel,
+            redact: ['req.headers.authorization', 'req.headers.cookie'],
+            serializers: {
+              req: (req: { method: string; url: string; ip?: string }) => ({ method: req.method, url: safeUrl(req.url), remoteAddress: req.ip }),
+            },
+          },
     trustProxy: config.trustProxy,
     bodyLimit: 1024 * 1024,
   });
 
   await app.register(cookie);
-  await app.register(rateLimit, { global: false });
+  await app.register(rateLimit, { global: false, keyGenerator: (req) => rateLimitKey(req.ip) });
 
   // Corps binaires (capture d'écran de la tablette).
   app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer', bodyLimit: 8 * 1024 * 1024 }, (_req, body, done) => done(null, body));
@@ -55,6 +84,7 @@ export async function buildApp(db: DB, opts: { logger?: boolean } = {}): Promise
     reply.header('X-Content-Type-Options', 'nosniff');
     reply.header('Referrer-Policy', 'same-origin');
     reply.header('X-Frame-Options', 'DENY');
+    if (config.production) reply.header('Strict-Transport-Security', 'max-age=15552000');
     if (!req.url.startsWith('/api/')) {
       reply.header(
         'Content-Security-Policy',
@@ -65,7 +95,7 @@ export async function buildApp(db: DB, opts: { logger?: boolean } = {}): Promise
   });
 
   app.setErrorHandler((err, req, reply) => {
-    if (err instanceof ValidationError || err instanceof ConfigError) {
+    if (err instanceof ValidationError || err instanceof ConfigError || err instanceof AuthError) {
       return reply.code(400).send({ error: 'invalid', message: err.message });
     }
     if (err instanceof NotFoundError) return reply.code(404).send({ error: 'not_found', message: err.message });

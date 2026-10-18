@@ -3,7 +3,7 @@
 import * as OTPAuth from 'otpauth';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { DB } from './db.js';
-import { decrypt, encrypt, hashPassword, randomToken, sha256, verifyPassword } from './crypto.js';
+import { decrypt, encrypt, hashPassword, randomToken, sha256, verifyPassword, verifyPasswordAsync } from './crypto.js';
 import { createHousehold, household } from './households.js';
 
 export const SESSION_COOKIE = 'sd_session';
@@ -119,6 +119,16 @@ export function dummyPasswordCheck(password: unknown): void {
   verifyPassword(typeof password === 'string' ? password : '', DUMMY_HASH);
 }
 
+/** Connexion : vérification asynchrone, pour ne pas bloquer les autres foyers pendant le calcul. */
+export async function checkPasswordAsync(user: UserRow | undefined, password: unknown): Promise<boolean> {
+  const pw = typeof password === 'string' ? password : '';
+  if (!user || typeof password !== 'string') {
+    await verifyPasswordAsync(pw, DUMMY_HASH);
+    return false;
+  }
+  return verifyPasswordAsync(pw, user.password_hash);
+}
+
 export function publicUser(db: DB, u: UserRow) {
   const h = db.prepare('SELECT id, name FROM households WHERE id = ?').get(u.household_id) as { id: number; name: string } | undefined;
   return {
@@ -220,6 +230,9 @@ function totpFor(secretBase32: string, label: string): OTPAuth.TOTP {
 }
 
 export function beginTotpSetup(db: DB, user: UserRow): { secret: string; otpauthUrl: string } {
+  // Déjà active : il faut d'abord la désactiver (avec un code), sinon une session volée
+  // suffirait à remplacer l'application d'authentification.
+  if (user.totp_enabled) throw new AuthError('La double authentification est déjà active : désactive-la d’abord avec un code.');
   const secret = new OTPAuth.Secret({ size: 20 }).base32;
   db.prepare('UPDATE users SET totp_pending_enc = ? WHERE id = ?').run(encrypt(secret), user.id);
   return { secret, otpauthUrl: totpFor(secret, user.login).toString() };

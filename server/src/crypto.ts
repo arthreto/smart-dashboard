@@ -94,6 +94,23 @@ export function verifyPassword(password: string, stored: string): boolean {
   return crypto.timingSafeEqual(actual, expected);
 }
 
+/** Variante asynchrone (hors de la boucle d'événements) pour la connexion. */
+export async function verifyPasswordAsync(password: string, stored: string): Promise<boolean> {
+  const [algo, n, r, p, saltB64, hashB64] = stored.split('$');
+  if (algo !== 'scrypt' || !saltB64 || !hashB64) return false;
+  const expected = Buffer.from(hashB64, 'base64');
+  const actual = await new Promise<Buffer>((resolve, reject) =>
+    crypto.scrypt(
+      password,
+      Buffer.from(saltB64, 'base64'),
+      expected.length,
+      { N: Number(n), r: Number(r), p: Number(p), maxmem: SCRYPT.maxmem },
+      (err, key) => (err ? reject(err) : resolve(key)),
+    ),
+  );
+  return crypto.timingSafeEqual(actual, expected);
+}
+
 /** Aperçu masqué d'un secret : quatre derniers caractères seulement. */
 export function previewSecret(value: string): string {
   if (!value) return '';

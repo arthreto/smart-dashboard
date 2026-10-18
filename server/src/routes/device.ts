@@ -22,9 +22,23 @@ import { setCinemaAlert } from '../integrations/pathe.js';
 import { isAllowedImage, processImage, rgb565ToJpeg } from '../images.js';
 import { logEvent } from '../events.js';
 import { HttpError } from '../http.js';
-import { household } from '../households.js';
+import { household, householdActive } from '../households.js';
 
 type Body = Record<string, unknown>;
+
+// Codes d'appairage : 6 chiffres partagés par tous les foyers. En plus de la limite par
+// adresse, un plafond global d'échecs empêche de les deviner depuis de nombreuses adresses.
+const PAIR_WINDOW_MS = 10 * 60_000;
+const PAIR_MAX_FAILURES = 30;
+const pairFailures: number[] = [];
+function pairingLocked(now = Date.now()): boolean {
+  while (pairFailures.length && pairFailures[0] < now - PAIR_WINDOW_MS) pairFailures.shift();
+  return pairFailures.length >= PAIR_MAX_FAILURES;
+}
+/** Pour les tests. */
+export function resetPairingGuard(): void {
+  pairFailures.length = 0;
+}
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -39,16 +53,25 @@ export function deviceRoutes(app: FastifyInstance, mainDb: DB): void {
       await reply.code(401).send({ error: 'device_unauthorized', message: 'Jeton de la tablette invalide : ré-appaire l’écran.' });
       return;
     }
+    if (!householdActive(d.household_id)) {
+      await reply.code(403).send({ error: 'account_disabled', message: 'Le compte de ce foyer a été désactivé par l’administrateur.' });
+      return;
+    }
     req.device = d;
     req.hdb = household(d.household_id);
   }
   const dev = { preHandler: requireDevice };
 
   app.post('/api/v1/pair', { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } }, async (req, reply) => {
+    if (pairingLocked()) {
+      return reply.code(429).send({ error: 'rate_limited', message: 'Trop de codes refusés : réessaie dans quelques minutes.' });
+    }
     const { code, name, firmware } = (req.body ?? {}) as Body;
     const res = pairDevice(code, name, firmware);
     if (!res) {
-      logEvent(mainDb, 'device', 'warning', `Code d’appairage refusé (${req.ip})`);
+      pairFailures.push(Date.now());
+      if (pairingLocked()) logEvent(mainDb, 'device', 'error', 'Appairage suspendu 10 min : trop de codes refusés (tentative de deviner un code ?)');
+      else logEvent(mainDb, 'device', 'warning', `Code d’appairage refusé (${req.ip})`);
       return reply.code(401).send({ error: 'invalid_code', message: 'Code invalide ou expiré.' });
     }
     return { token: res.token };

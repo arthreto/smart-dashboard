@@ -55,7 +55,7 @@ import { listCinemas } from '../integrations/pathe.js';
 import { listCalendars } from '../integrations/icloud.js';
 import { exportBackup, importBackup } from '../backup.js';
 import { NotFoundError, errorMessage } from '../http.js';
-import { household } from '../households.js';
+import { getHousehold, household } from '../households.js';
 
 type Body = Record<string, unknown>;
 
@@ -97,7 +97,8 @@ export function householdRoutes(app: FastifyInstance, mainDb: DB): void {
     };
   });
 
-  app.post('/api/sync', auth, async (req) => {
+  const syncLimit = { rateLimit: { max: 6, timeWindow: '1 minute' } };
+  app.post('/api/sync', { ...auth, config: syncLimit }, async (req) => {
     await runAll(hdb(req));
     logEvent(hdb(req), 'console', 'info', 'Synchronisation manuelle lancée');
     return { ok: true };
@@ -256,9 +257,9 @@ export function householdRoutes(app: FastifyInstance, mainDb: DB): void {
     return integrationDto(hdb(req), getDef(id)!);
   });
 
-  app.post('/api/integrations/:id/test', auth, async (req) => testIntegration(hdb(req), integrationId(req.params)));
+  app.post('/api/integrations/:id/test', { ...auth, config: syncLimit }, async (req) => testIntegration(hdb(req), integrationId(req.params)));
 
-  app.post('/api/integrations/:id/refresh', auth, async (req, reply) => {
+  app.post('/api/integrations/:id/refresh', { ...auth, config: syncLimit }, async (req, reply) => {
     const res = await runIntegration(hdb(req), integrationId(req.params), 'manual');
     if (!res.ok) return reply.code(502).send({ error: 'refresh_failed', message: res.message });
     return { ok: true };
@@ -281,7 +282,9 @@ export function householdRoutes(app: FastifyInstance, mainDb: DB): void {
   // une session authentifiée, à usage unique et lié au foyer, sert de preuve.
   app.get('/api/oauth/spotify/callback', async (req, reply) => {
     const q = req.query as { code?: string; state?: string; error?: string };
-    const householdId = q.state ? consumeState(q.state) : null;
+    const stateHousehold = q.state ? consumeState(q.state) : null;
+    // Foyer supprimé pendant la connexion : on ne le recrée pas.
+    const householdId = stateHousehold && getHousehold(stateHousehold) ? stateHousehold : null;
     if (q.error || !q.code || !householdId) {
       if (householdId) logEvent(household(householdId), 'spotify', 'error', `Connexion Spotify refusée${q.error ? ` (${q.error})` : ''}`);
       return reply.redirect('/services?spotify=error');

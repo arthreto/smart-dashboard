@@ -34,7 +34,16 @@ export async function processImage(src: string, w: number, h: number): Promise<B
   const file = path.join(cacheDir(), `${sha256(`${src}|${width}x${height}`)}.jpg`);
   if (fs.existsSync(file)) return fs.promises.readFile(file);
 
-  const res = await fetchRaw(src, { timeoutMs: 15_000 });
+  // Redirections suivies à la main : chaque étape doit rester sur un hôte autorisé.
+  let url = src;
+  let res = await fetchRaw(url, { timeoutMs: 15_000, redirect: 'manual' });
+  for (let hop = 0; hop < 3 && res.status >= 300 && res.status < 400; hop++) {
+    const next = res.headers.get('location');
+    if (!next) break;
+    url = new URL(next, url).toString();
+    if (!isAllowedImage(url)) throw new Error('Redirection vers un hôte non autorisé');
+    res = await fetchRaw(url, { timeoutMs: 15_000, redirect: 'manual' });
+  }
   if (!res.ok) throw new Error(`Image indisponible (${res.status})`);
   const len = Number(res.headers.get('content-length') ?? 0);
   if (len > MAX_BYTES) throw new Error('Image trop lourde');

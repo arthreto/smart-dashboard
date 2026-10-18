@@ -25,6 +25,7 @@ let tok1 = ''; // jeton du premier écran (foyer de l'admin)
 let tok2 = ''; // second écran du même foyer
 let dev1 = 0;
 let dev2 = 0;
+let tokLea = ''; // écran du foyer de Léa
 
 function cookieOf(res: { headers: Record<string, unknown> }): string {
   const set = res.headers['set-cookie'];
@@ -283,6 +284,7 @@ test('invitation : nouveau compte avec son propre foyer, isolé des autres', asy
 
   // Son écran voit ses données, pas celles de l'admin.
   const lea = await pairScreen(user2);
+  tokLea = lea.token;
   res = await app.inject({ method: 'GET', url: '/api/v1/state', headers: bearer(lea.token) });
   assert.equal(res.json().alarms.length, 4);
   assert.ok(!res.json().tasks.items.some((i: { done: boolean }) => i.done));
@@ -301,6 +303,12 @@ test('administration : désactivation, lien de réinitialisation, suppression', 
 
   res = await app.inject({ method: 'PATCH', url: `/api/admin/users/${me.id}`, headers: { cookie: admin, ...H }, payload: { disabled: true } });
   assert.equal(res.statusCode, 400);
+  res = await app.inject({ method: 'PATCH', url: `/api/admin/users/${me.id}`, headers: { cookie: admin, ...H }, payload: { disabled: 1 } });
+  assert.equal(res.statusCode, 400, 'valeur non booléenne refusée');
+  res = await app.inject({ method: 'PATCH', url: `/api/admin/users/${me.id}`, headers: { cookie: admin, ...H }, payload: { role: 'superadmin', disabled: false } });
+  assert.equal(res.statusCode, 400);
+  res = await app.inject({ method: 'GET', url: '/api/habits', headers: { cookie: admin } });
+  assert.equal(res.statusCode, 200, 'l’administrateur est toujours connecté');
 
   res = await app.inject({ method: 'PATCH', url: `/api/admin/users/${lea.id}`, headers: { cookie: admin, ...H }, payload: { disabled: true } });
   assert.equal(res.statusCode, 200);
@@ -308,7 +316,17 @@ test('administration : désactivation, lien de réinitialisation, suppression', 
   assert.equal(res.statusCode, 401, 'sessions fermées');
   res = await app.inject({ method: 'POST', url: '/api/auth/login', headers: H, payload: { login: 'lea@exemple.fr', password: 'mot-de-passe-de-lea' } });
   assert.equal(res.statusCode, 403);
+  res = await app.inject({ method: 'GET', url: '/api/v1/state', headers: bearer(tokLea) });
+  assert.equal(res.statusCode, 403, 'les écrans d’un compte désactivé s’arrêtent');
   await app.inject({ method: 'PATCH', url: `/api/admin/users/${lea.id}`, headers: { cookie: admin, ...H }, payload: { disabled: false } });
+  res = await app.inject({ method: 'GET', url: '/api/v1/state', headers: bearer(tokLea) });
+  assert.equal(res.statusCode, 200);
+
+  // Un administrateur promu peut être rétrogradé, mais jamais le dernier administrateur actif.
+  res = await app.inject({ method: 'PATCH', url: `/api/admin/users/${lea.id}`, headers: { cookie: admin, ...H }, payload: { role: 'admin' } });
+  assert.equal(res.statusCode, 200);
+  res = await app.inject({ method: 'PATCH', url: `/api/admin/users/${lea.id}`, headers: { cookie: admin, ...H }, payload: { role: 'user' } });
+  assert.equal(res.statusCode, 200);
 
   res = await app.inject({ method: 'POST', url: `/api/admin/users/${lea.id}/reset-link`, headers: { cookie: admin, ...H } });
   const token = res.json().url.split('/invitation/')[1];
@@ -415,6 +433,7 @@ test('reprise d’une installation de l’ancienne version', async () => {
   assert.equal(JSON.parse(d.display).brightness, 42);
 
   const hdb = openDb(path.join(dir, 'households', '1.db'));
+  assert.equal(hdb.prepare("SELECT 1 FROM sqlite_master WHERE name = 'admin'").get(), undefined, 'ancien mot de passe retiré de la base du foyer');
   assert.equal((hdb.prepare("SELECT device_id FROM alarms WHERE label = 'Boulot'").get() as { device_id: number }).device_id, 1);
   const sp = hdb.prepare("SELECT config FROM integrations WHERE id = 'spotify'").get() as { config: string };
   assert.equal(JSON.parse(sp.config).clientId, undefined);
@@ -425,6 +444,32 @@ test('reprise d’une installation de l’ancienne version', async () => {
   assert.equal(migrateLegacy(m, dir), false, 'une seule fois');
   m.close();
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('appairage : plafond global de codes refusés (adresses multiples)', async () => {
+  const { resetPairingGuard } = await import('../src/routes/device.js');
+  resetPairingGuard();
+  for (let i = 0; i < 30; i++) {
+    const res = await app.inject({ method: 'POST', url: '/api/v1/pair', remoteAddress: `203.0.113.${i + 1}`, payload: { code: String(100000 + i) } });
+    assert.equal(res.statusCode, 401);
+  }
+  let res = await app.inject({ method: 'POST', url: '/api/devices/pairing-code', headers: { cookie: admin, ...H }, payload: {} });
+  const { code } = res.json();
+  res = await app.inject({ method: 'POST', url: '/api/v1/pair', remoteAddress: '198.51.100.7', payload: { code } });
+  assert.equal(res.statusCode, 429, 'même un bon code est refusé pendant la suspension');
+  resetPairingGuard();
+});
+
+test('journaux et limites : jetons masqués, préfixe IPv6 /64', async () => {
+  const { safeUrl, rateLimitKey } = await import('../src/app.js');
+  assert.equal(safeUrl('/api/invites/abcDEF123/accept'), '/api/invites/…/accept');
+  assert.equal(safeUrl('/api/oauth/spotify/callback?code=x&state=y'), '/api/oauth/spotify/callback?…');
+  assert.equal(safeUrl('/api/habits'), '/api/habits');
+  assert.equal(rateLimitKey('203.0.113.9'), '203.0.113.9');
+  assert.equal(rateLimitKey('::ffff:203.0.113.9'), '203.0.113.9');
+  assert.equal(rateLimitKey('2001:db8:1:2:aaaa:bbbb:cccc:dddd'), '2001:db8:1:2::/64');
+  assert.equal(rateLimitKey('2001:db8:1:2::5'), '2001:db8:1:2::/64');
+  assert.equal(rateLimitKey('2001:db8::1'), '2001:db8:0:0::/64');
 });
 
 test('séries avec jokers', async () => {

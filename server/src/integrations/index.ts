@@ -9,7 +9,7 @@ import { roblox } from './roblox.js';
 import { spotify } from './spotify.js';
 import { ConfigError, type IntegrationContext, type IntegrationDef, type IntegrationId, type IntegrationStatus } from './types.js';
 import { weather } from './weather.js';
-import { household, householdIdOf, listHouseholds, mainOrNull } from '../households.js';
+import { getHousehold, household, householdActive, householdIdOf, listHouseholds, mainOrNull } from '../households.js';
 import { appCredentials, serviceAvailable } from '../services.js';
 
 export const INTEGRATIONS: IntegrationDef[] = [spotify, roblox, pathe, icloud, weather];
@@ -232,6 +232,8 @@ export async function tick(db: DB): Promise<void> {
 export async function tickAll(onError: (err: unknown, householdId: number) => void): Promise<void> {
   for (const h of listHouseholds()) {
     try {
+      // Foyer désactivé ou supprimé entre-temps : rien à mettre à jour.
+      if (!getHousehold(h.id) || !householdActive(h.id)) continue;
       await tick(household(h.id));
     } catch (err) {
       onError(err, h.id);

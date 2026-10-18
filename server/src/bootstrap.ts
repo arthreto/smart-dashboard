@@ -111,6 +111,9 @@ export function migrateLegacy(db: DB, dataDir: string): boolean {
     delete secrets.clientSecret;
     legacy.prepare("UPDATE integrations SET config = ?, secrets_enc = ? WHERE id = 'spotify'").run(JSON.stringify(cfg), encryptJson(secrets));
   }
+  // Les anciens identifiants (mot de passe, 2FA, jeton) vivent désormais dans main.db :
+  // on ne laisse pas de copie dans la base du foyer.
+  legacy.exec('DROP TABLE IF EXISTS admin; DROP TABLE IF EXISTS sessions; DROP TABLE IF EXISTS device;');
   legacy.pragma('wal_checkpoint(TRUNCATE)');
   legacy.close();
 

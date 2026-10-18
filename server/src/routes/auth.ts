@@ -6,7 +6,7 @@ import {
   AuthError,
   SESSION_COOKIE,
   beginTotpSetup,
-  checkPassword,
+  checkPasswordAsync,
   checkTotp,
   confirmTotpSetup,
   createSession,
@@ -14,7 +14,6 @@ import {
   deleteSessionByToken,
   deleteUserSessions,
   disableTotp,
-  dummyPasswordCheck,
   findInvite,
   findUserByLogin,
   getUser,
@@ -73,10 +72,10 @@ export function authRoutes(app: FastifyInstance, db: DB): void {
 
   app.post('/api/auth/login', { config: loginLimit }, async (req, reply) => {
     const { login, password, totp } = (req.body ?? {}) as Body;
-    const user = typeof login === 'string' && login.trim() ? findUserByLogin(db, login) : undefined;
-    if (!user) dummyPasswordCheck(password);
-    if (!user || !checkPassword(user, password)) {
-      logEvent(db, 'console', 'warning', `Échec de connexion${typeof login === 'string' ? ` pour « ${login.slice(0, 60)} »` : ''} (${req.ip})`);
+    const user = typeof login === 'string' && login.trim() && login.length <= 64 ? findUserByLogin(db, login) : undefined;
+    if (!(await checkPasswordAsync(user, password)) || !user) {
+      // L'identifiant saisi n'est journalisé que s'il existe (quelqu'un peut y coller son mot de passe par erreur).
+      logEvent(db, 'console', 'warning', `Échec de connexion${user ? ` pour « ${user.login} »` : ' (identifiant inconnu)'} (${req.ip})`);
       return reply.code(401).send({ error: 'invalid_credentials', message: 'Identifiant ou mot de passe incorrect.' });
     }
     if (user.disabled) return reply.code(403).send({ error: 'disabled', message: 'Ce compte a été désactivé par l’administrateur.' });
@@ -169,13 +168,14 @@ export function authRoutes(app: FastifyInstance, db: DB): void {
 
   app.post('/api/auth/password', { ...auth, config: loginLimit }, async (req, reply) => {
     const { current, next } = (req.body ?? {}) as Body;
-    if (!checkPassword(req.user, current)) {
+    if (!(await checkPasswordAsync(req.user, current))) {
       return reply.code(400).send({ error: 'invalid_credentials', message: 'Mot de passe actuel incorrect.' });
     }
     const err = validatePasswordStrength(next);
     if (err) return reply.code(400).send({ error: 'weak_password', message: err });
     setPassword(db, req.user!.id, next as string);
     deleteUserSessions(db, req.user!.id, req.session!.id);
+    db.prepare("DELETE FROM invites WHERE kind = 'reset' AND user_id = ? AND used_at IS NULL").run(req.user!.id);
     logEvent(db, 'console', 'warning', `Mot de passe de « ${req.user!.login} » modifié`);
     return { ok: true };
   });
