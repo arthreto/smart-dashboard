@@ -100,7 +100,8 @@ int main(int argc, char** argv) {
         platform.save("token", token);
         platform.save("demo", "0");
     }
-    if (demo || (!shotsDir.empty() && !live)) platform.save("demo", "1");
+    platform.save("demo", "0");  // ancienne version : le mode démo était mémorisé
+    if (demo || (!shotsDir.empty() && !live)) App::requestDemo();
 
     lv_init();
     lv_display_t* disp = lv_sdl_window_create(1280, 720);

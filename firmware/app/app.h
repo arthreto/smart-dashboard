@@ -58,6 +58,9 @@ public:
     void lock();
     void wake();
     void startDemo();
+    /** Mode démo pour cette session seulement (option --demo de l'émulateur) : jamais
+     *  mémorisé, pour que le lancement suivant propose l'installation comme la vraie tablette. */
+    static void requestDemo() { demoRequested_ = true; }
     void openSetup();
     void factoryReset();
 
@@ -118,6 +121,7 @@ private:
     Screen screen_ = Screen::Home;
     bool dirty_ = true;
     bool demo_ = false;
+    static inline bool demoRequested_ = false;
     bool online_ = false;
     bool polling_ = false;
     bool locked_ = false;

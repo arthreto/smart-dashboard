@@ -37,7 +37,7 @@ void App::loadConfig() {
     hal::Hal& h = hal::get();
     std::string url = h.load("api_url");
     std::string token = h.load("token");
-    demo_ = h.load("demo") == "1";
+    demo_ = demoRequested_;  // le mode démo n'est jamais conservé d'un lancement à l'autre
     api::configure(url, token);
 }
 
@@ -72,7 +72,7 @@ void App::init() {
     lv_timer_create([](lv_timer_t*) { App::get().loop(); }, 100, nullptr);
 
     if (!demo_ && !api::configured()) openSetup();
-    else if (state_.settings.lockOnWake && !state_.settings.pinHash.empty()) lock();
+    else if (!demo_ && state_.settings.lockOnWake && !state_.settings.pinHash.empty()) lock();
 
     applyBrightness();
     rebuild();
@@ -734,7 +734,6 @@ void AppAccess::finishPairing(const std::string& url, const std::string& token) 
 
 void App::startDemo() {
     demo_ = true;
-    hal::get().save("demo", "1");
     applyState(DEMO_STATE_JSON, true);
     AppAccess::closeSetup();
     toast("Mode démo : données d’exemple");
