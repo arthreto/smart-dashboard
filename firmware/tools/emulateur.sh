@@ -26,6 +26,11 @@ fi
 
 # Le dossier de compilation reste côté Linux (bien plus rapide que /mnt/c).
 echo "==> Compilation (première fois : quelques minutes, LVGL est téléchargé)"
+# Projet déplacé (autre dossier) : l'ancien dossier de compilation ne sert plus.
+if [ -f "$BUILD/CMakeCache.txt" ] && ! grep -qxF "CMAKE_HOME_DIRECTORY:INTERNAL=$HERE" "$BUILD/CMakeCache.txt"; then
+  echo "==> Le projet a changé de dossier : nouvelle compilation"
+  rm -rf "$BUILD"
+fi
 cmake -S "$HERE" -B "$BUILD" -DCMAKE_BUILD_TYPE=Release >/dev/null
 cmake --build "$BUILD" -j"$(nproc)"
 
