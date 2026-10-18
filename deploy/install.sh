@@ -67,6 +67,16 @@ port_owner() { # nom du programme qui écoute sur le port TCP $1 (vide si libre)
   echo "${name:-inconnu}"
 }
 
+port_is_ours() { # vrai si le port $1 est tenu par notre propre service (mise à jour)
+  command -v ss >/dev/null || return 1
+  local pid user
+  pid="$(ss -ltnpH "( sport = :$1 )" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2)"
+  [ -n "$pid" ] || return 1
+  user="$(ps -o user= -p "$pid" 2>/dev/null | tr -d ' ')"
+  [ "$user" = "$APP_USER" ] && return 0
+  [ "$(systemctl show -p MainPID --value "$SERVICE" 2>/dev/null)" = "$pid" ]
+}
+
 pkg_missing() { dpkg -s "$1" >/dev/null 2>&1 && return 1 || return 0; }
 
 command -v ss >/dev/null || warn "commande « ss » absente : les ports utilisés ne peuvent pas être vérifiés"
@@ -236,7 +246,7 @@ esac
 if [ -z "$PORT" ]; then
   bad "Aucun port libre entre 8787 et 8799 pour l'application"
   BLOCKERS+=("aucun port local libre (8787-8799)")
-elif [ -n "$PORT_OWNER" ] && [ "$PORT_OWNER" != node ]; then
+elif [ -n "$PORT_OWNER" ] && [ "$PORT_OWNER" != node ] && ! port_is_ours "$PORT"; then
   bad "Port $PORT déjà utilisé par $PORT_OWNER"
   BLOCKERS+=("port $PORT pris par $PORT_OWNER")
 else
