@@ -9,6 +9,8 @@ import { roblox } from './roblox.js';
 import { spotify } from './spotify.js';
 import { ConfigError, type IntegrationContext, type IntegrationDef, type IntegrationId, type IntegrationStatus } from './types.js';
 import { weather } from './weather.js';
+import { household, householdIdOf, listHouseholds, mainOrNull } from '../households.js';
+import { appCredentials, serviceAvailable } from '../services.js';
 
 export const INTEGRATIONS: IntegrationDef[] = [spotify, roblox, pathe, icloud, weather];
 
@@ -39,8 +41,11 @@ function getRow(db: DB, id: string): Row {
 export function makeContext(db: DB, id: IntegrationId): IntegrationContext {
   const def = getDef(id)!;
   const row = getRow(db, id);
+  const m = mainOrNull();
   const ctx: IntegrationContext = {
     db,
+    householdId: householdIdOf(db),
+    app: m ? appCredentials(m, id) : {},
     config: { ...def.defaults, ...safeParse(row.config) },
     secrets: decryptJson<Record<string, string>>(row.secrets_enc, {}),
     saveConfig(patch) {
@@ -70,8 +75,14 @@ function safeParse(s: string): Record<string, unknown> {
   }
 }
 
+/** Service proposé par l'administrateur (tous le sont tant qu'il n'en a pas retiré). */
+export function isAvailable(id: string): boolean {
+  const m = mainOrNull();
+  return m ? serviceAvailable(m, id) : true;
+}
+
 export function isEnabled(db: DB, id: IntegrationId): boolean {
-  return !!getRow(db, id).enabled;
+  return isAvailable(id) && !!getRow(db, id).enabled;
 }
 
 export function toDto(db: DB, def: IntegrationDef) {
@@ -107,7 +118,7 @@ export function toDto(db: DB, def: IntegrationDef) {
 }
 
 export function listIntegrations(db: DB) {
-  return INTEGRATIONS.map((def) => toDto(db, def));
+  return INTEGRATIONS.filter((def) => isAvailable(def.id)).map((def) => toDto(db, def));
 }
 
 export function updateIntegration(
@@ -137,8 +148,6 @@ export function updateIntegration(
       patch[k] = v === null ? null : (v as string).trim();
     }
     ctx.saveSecrets(patch);
-    // Changer les identifiants Spotify invalide la connexion existante.
-    if (id === 'spotify' && 'clientSecret' in patch) ctx.saveSecrets({ accessToken: null, refreshToken: null, accessExpiresAt: null });
   }
   if (body.enabled !== undefined) {
     db.prepare('UPDATE integrations SET enabled = ? WHERE id = ?').run(body.enabled ? 1 : 0, id);
@@ -152,12 +161,14 @@ const running = new Set<string>();
 
 export async function runIntegration(db: DB, id: IntegrationId, reason = 'auto'): Promise<{ ok: boolean; message: string }> {
   const def = getDef(id)!;
-  if (running.has(id)) return { ok: false, message: 'Mise à jour déjà en cours' };
+  const key = `${householdIdOf(db)}:${id}`;
+  if (running.has(key)) return { ok: false, message: 'Mise à jour déjà en cours' };
+  if (!isAvailable(id)) return { ok: false, message: 'Service désactivé par l’administrateur' };
   const row = getRow(db, id);
   const ctx = makeContext(db, id);
   const missing = def.missing(ctx);
   if (!row.enabled || missing) return { ok: false, message: missing ?? 'Intégration désactivée' };
-  running.add(id);
+  running.add(key);
   try {
     const result = await withTimeout(def.run(ctx), 120_000);
     db.prepare('UPDATE integrations SET status = ?, status_detail = ?, last_run_at = ? WHERE id = ?').run(
@@ -182,7 +193,7 @@ export async function runIntegration(db: DB, id: IntegrationId, reason = 'auto')
     if (row.status !== 'error' || reason !== 'auto') logEvent(db, id, 'error', `${def.name} : ${msg}`);
     return { ok: false, message: msg };
   } finally {
-    running.delete(id);
+    running.delete(key);
   }
 }
 
@@ -200,7 +211,7 @@ export async function testIntegration(db: DB, id: IntegrationId): Promise<{ ok: 
   }
 }
 
-/** Appelé toutes les 15 s : lance ce qui est dû (et réessaie les erreurs après 15 min). */
+/** Lance ce qui est dû pour un foyer (et réessaie les erreurs après 15 min). */
 export async function tick(db: DB): Promise<void> {
   ensureRows(db);
   const now = new Date();
@@ -208,7 +219,7 @@ export async function tick(db: DB): Promise<void> {
   await Promise.all(
     rows.map(async (row) => {
       const def = getDef(row.id);
-      if (!def) return;
+      if (!def || !isAvailable(def.id)) return;
       const last = row.last_run_at ? new Date(row.last_run_at) : null;
       const ctx = makeContext(db, def.id);
       const retry = row.status === 'error' && last && now.getTime() - last.getTime() > 15 * 60_000;
@@ -217,8 +228,19 @@ export async function tick(db: DB): Promise<void> {
   );
 }
 
+/** Appelé toutes les 15 s par le serveur : tous les foyers, l'un après l'autre. */
+export async function tickAll(onError: (err: unknown, householdId: number) => void): Promise<void> {
+  for (const h of listHouseholds()) {
+    try {
+      await tick(household(h.id));
+    } catch (err) {
+      onError(err, h.id);
+    }
+  }
+}
+
 export async function runAll(db: DB): Promise<void> {
-  await Promise.all(INTEGRATIONS.map((d) => runIntegration(db, d.id, 'manual')));
+  await Promise.all(INTEGRATIONS.filter((d) => isAvailable(d.id)).map((d) => runIntegration(db, d.id, 'manual')));
 }
 
 export function servicesSummary(db: DB) {

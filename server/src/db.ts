@@ -5,7 +5,14 @@ import { config } from './config.js';
 
 export type DB = Database.Database;
 
-const MIGRATIONS: string[] = [
+// Deux sortes de bases :
+//   - la base principale (main.db) : comptes, sessions, invitations, foyers, écrans,
+//     réglages globaux (clés API de l'administrateur) et journal du serveur ;
+//   - une base par foyer (households/<id>.db) : habitudes, réveils, intégrations,
+//     caches… Les données d'un foyer sont ainsi physiquement séparées des autres.
+
+/** Schéma d'une base de foyer (la migration 1 est l'ancien schéma mono-utilisateur). */
+const HOUSEHOLD_MIGRATIONS: string[] = [
   // 1 — schéma initial
   `
   CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -114,26 +121,156 @@ const MIGRATIONS: string[] = [
 
   CREATE TABLE cinema_alerts (film_id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', notified INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
   `,
+  // 2 — plusieurs écrans par foyer : chaque réveil et chaque commande appartient à un écran
+  // (device_id = id dans main.devices ; NULL = réveil pas encore attribué, repris par le
+  // premier écran associé). Les tables « device » et « pairing_codes » ne servent plus.
+  `
+  ALTER TABLE alarms ADD COLUMN device_id INTEGER;
+  ALTER TABLE commands ADD COLUMN device_id INTEGER;
+  CREATE INDEX alarms_device ON alarms(device_id);
+  CREATE INDEX commands_device ON commands(device_id);
+  `,
 ];
 
-export function openDb(file = path.join(config.dataDir, 'smart-dashboard.db')): DB {
+const MAIN_MIGRATIONS: string[] = [
+  `
+  CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+  CREATE TABLE households (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL CHECK (length(name) BETWEEN 1 AND 60),
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    login TEXT NOT NULL UNIQUE COLLATE NOCASE CHECK (length(login) BETWEEN 3 AND 120),
+    name TEXT NOT NULL DEFAULT '',
+    role TEXT NOT NULL DEFAULT 'user' CHECK (role IN ('admin', 'user')),
+    household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+    password_hash TEXT NOT NULL,
+    totp_secret_enc TEXT,
+    totp_pending_enc TEXT,
+    totp_enabled INTEGER NOT NULL DEFAULT 0 CHECK (totp_enabled IN (0, 1)),
+    disabled INTEGER NOT NULL DEFAULT 0 CHECK (disabled IN (0, 1)),
+    created_at TEXT NOT NULL,
+    last_login_at TEXT
+  );
+  CREATE INDEX users_household ON users(household_id);
+
+  CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,
+    token_hash TEXT NOT NULL UNIQUE,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_agent TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL
+  );
+  CREATE INDEX sessions_user ON sessions(user_id);
+
+  -- Liens à usage unique : invitation (création d'un compte et de son foyer) ou
+  -- réinitialisation du mot de passe d'un compte existant.
+  CREATE TABLE invites (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL CHECK (kind IN ('invite', 'reset')),
+    token_hash TEXT NOT NULL UNIQUE,
+    note TEXT NOT NULL DEFAULT '',
+    user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+    created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used_at TEXT,
+    used_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    CHECK ((kind = 'reset') = (user_id IS NOT NULL))
+  );
+
+  CREATE TABLE devices (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+    name TEXT NOT NULL DEFAULT 'Tab5' CHECK (length(name) BETWEEN 1 AND 40),
+    token_hash TEXT UNIQUE,
+    created_at TEXT NOT NULL,
+    paired_at TEXT,
+    last_seen_at TEXT,
+    last_sync_at TEXT,
+    battery INTEGER,
+    charging INTEGER,
+    firmware TEXT,
+    rssi INTEGER,
+    ip TEXT,
+    screen TEXT,
+    display TEXT NOT NULL DEFAULT '{}',
+    layout TEXT
+  );
+  CREATE INDEX devices_household ON devices(household_id);
+
+  CREATE TABLE pairing_codes (
+    code_hash TEXT PRIMARY KEY,
+    household_id INTEGER NOT NULL REFERENCES households(id) ON DELETE CASCADE,
+    device_id INTEGER REFERENCES devices(id) ON DELETE CASCADE,
+    name TEXT NOT NULL DEFAULT '',
+    expires_at TEXT NOT NULL
+  );
+
+  CREATE TABLE global_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+  CREATE TABLE events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT NOT NULL,
+    source TEXT NOT NULL,
+    level TEXT NOT NULL CHECK (level IN ('info', 'success', 'warning', 'error')),
+    message TEXT NOT NULL
+  );
+  CREATE INDEX events_ts ON events(ts);
+  `,
+];
+
+function openWith(file: string, migrations: string[]): DB {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
   const db = new Database(file);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
-  migrate(db);
+  migrate(db, migrations);
   return db;
 }
 
-function migrate(db: DB): void {
+/** Base d'un foyer (habitudes, réveils, intégrations…). */
+export function openDb(file: string): DB {
+  return openWith(file, HOUSEHOLD_MIGRATIONS);
+}
+
+/** Base principale : comptes, foyers, écrans, réglages globaux. */
+export function openMainDb(file = path.join(config.dataDir, 'main.db')): DB {
+  return openWith(file, MAIN_MIGRATIONS);
+}
+
+function migrate(db: DB, migrations: string[]): void {
   const version = db.pragma('user_version', { simple: true }) as number;
-  for (let i = version; i < MIGRATIONS.length; i++) {
+  for (let i = version; i < migrations.length; i++) {
     db.transaction(() => {
-      db.exec(MIGRATIONS[i]);
+      db.exec(migrations[i]);
       db.pragma(`user_version = ${i + 1}`);
     })();
   }
+}
+
+export function getGlobal<T>(db: DB, key: string, fallback: T): T {
+  const row = db.prepare('SELECT value FROM global_settings WHERE key = ?').get(key) as { value: string } | undefined;
+  if (!row) return fallback;
+  try {
+    return JSON.parse(row.value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+export function setGlobal(db: DB, key: string, value: unknown): void {
+  db.prepare('INSERT INTO global_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').run(
+    key,
+    JSON.stringify(value),
+  );
 }
 
 /** Petit helper pour les réglages JSON clé/valeur. */

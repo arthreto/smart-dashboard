@@ -1,283 +1,190 @@
-import fs from 'node:fs';
-import path from 'node:path';
+// Routes du panel administrateur : comptes et foyers, invitations, services et clés
+// d'application globales, journal du serveur. Réservées au rôle « admin ».
 import type { FastifyInstance } from 'fastify';
 import type { DB } from '../db.js';
-import { getSetting, setSetting } from '../db.js';
 import { config } from '../config.js';
-import { requireSession } from '../auth.js';
+import { requireAdmin, createInvite, deleteUserSessions, getUser, type UserRow } from '../auth.js';
 import { recentEvents, logEvent } from '../events.js';
-import {
-  HabitBook,
-  ValidationError,
-  computeBadges,
-  createHabit,
-  getStreakSettings,
-  saveStreakSettings,
-  toDto,
-  updateHabit,
-} from '../habits.js';
-import { createAlarm, deleteAlarm, getRoutine, listAlarms, saveRoutine, updateAlarm } from '../alarms.js';
-import {
-  createPairingCode,
-  deviceInfo,
-  getDeviceRow,
-  queueCommand,
-  saveDisplay,
-  saveLayout,
-  setPin,
-  unpair,
-} from '../device.js';
-import {
-  ConfigError,
-  getDef,
-  listIntegrations,
-  makeContext,
-  revealSecret,
-  runAll,
-  runIntegration,
-  servicesSummary,
-  testIntegration,
-  toDto as integrationDto,
-  updateIntegration,
-  type IntegrationId,
-} from '../integrations/index.js';
-import { buildAuthorizeUrl, consumeState, exchangeCode } from '../integrations/spotify.js';
-import { resolvePlaceId } from '../integrations/roblox.js';
-import { listCinemas } from '../integrations/pathe.js';
-import { listCalendars } from '../integrations/icloud.js';
-import { exportBackup, importBackup } from '../backup.js';
-import { errorMessage } from '../http.js';
+import { ValidationError } from '../habits.js';
+import { NotFoundError } from '../http.js';
+import { deleteHousehold, household, listHouseholds } from '../households.js';
+import { deviceOnline, listDevices, removeHouseholdDeviceFiles } from '../device.js';
+import { listServices, revealServiceSecret, serviceDto, SERVICE_IDS, updateService, type ServiceId } from '../services.js';
+import { makeContext } from '../integrations/index.js';
+import { forgetSpotifyAccount } from '../integrations/spotify.js';
 
 type Body = Record<string, unknown>;
 
-function idParam(params: unknown): number {
+function inviteUrl(token: string): string {
+  return `${config.publicUrl}/invitation/${token}`;
+}
+
+function userParam(db: DB, params: unknown): UserRow {
   const id = Number((params as { id: string }).id);
-  if (!Number.isInteger(id) || id <= 0) throw new ValidationError('Identifiant invalide.');
+  const u = Number.isInteger(id) ? getUser(db, id) : undefined;
+  if (!u) throw new NotFoundError('Compte introuvable.');
+  return u;
+}
+
+function serviceParam(params: unknown): ServiceId {
+  const id = (params as { id: string }).id as ServiceId;
+  if (!SERVICE_IDS.includes(id)) throw new NotFoundError('Service inconnu.');
   return id;
 }
 
-function integrationId(params: unknown): IntegrationId {
-  const id = (params as { id: string }).id;
-  if (!getDef(id)) throw new ConfigError('Intégration inconnue.');
-  return id as IntegrationId;
-}
-
 export function adminRoutes(app: FastifyInstance, db: DB): void {
-  const auth = { preHandler: requireSession };
+  const admin = { preHandler: requireAdmin };
 
-  // ------------------------------------------------------------ vue d'ensemble
-  app.get('/api/overview', auth, async () => {
-    const book = new HabitBook(db);
-    const today = book.dayStats(book.today);
-    const dev = deviceInfo(db);
+  app.get('/api/admin/overview', admin, async () => {
+    const households = listHouseholds();
+    const devices = households.flatMap((h) => listDevices(h.id));
+    const users = (db.prepare('SELECT COUNT(*) AS n, SUM(disabled) AS d FROM users').get() as { n: number; d: number | null });
     return {
-      device: {
-        paired: dev.paired,
-        online: dev.online,
-        name: dev.name,
-        lastSeenAt: dev.lastSeenAt,
-        battery: dev.battery,
-        charging: dev.charging,
-        firmware: dev.firmware,
-        rssi: dev.rssi,
-        ip: dev.ip,
-        autonomyDays: dev.autonomyDays,
-      },
-      lastSync: dev.lastSyncAt,
-      today: { date: book.today, done: today.done, total: today.total, streak: book.streak(), bestStreak: book.bestStreak() },
-      services: [...servicesSummary(db), { id: 'iphone', name: 'iPhone (Bluetooth)', status: 'local', detail: 'Géré directement par la tablette' }],
-      events: recentEvents(db, 50),
+      users: users.n,
+      disabledUsers: users.d ?? 0,
+      households: households.length,
+      devices: devices.length,
+      devicesOnline: devices.filter(deviceOnline).length,
+      pendingInvites: (db.prepare("SELECT COUNT(*) AS n FROM invites WHERE kind = 'invite' AND used_at IS NULL AND expires_at > ?").get(new Date().toISOString()) as { n: number }).n,
+      services: listServices(db).map((s) => ({ id: s.id, name: s.name, available: s.available, configured: s.configured })),
+      publicUrl: config.publicUrl,
+      events: recentEvents(db, 80),
     };
   });
 
-  app.post('/api/sync', auth, async () => {
-    await runAll(db);
-    logEvent(db, 'console', 'info', 'Synchronisation manuelle lancée');
+  // ------------------------------------------------------------ comptes et foyers
+  app.get('/api/admin/users', admin, async () => {
+    const rows = db
+      .prepare(
+        `SELECT u.id, u.login, u.name, u.role, u.disabled, u.totp_enabled, u.created_at, u.last_login_at, u.household_id, h.name AS household_name
+         FROM users u JOIN households h ON h.id = u.household_id ORDER BY u.id`,
+      )
+      .all() as {
+      id: number;
+      login: string;
+      name: string;
+      role: string;
+      disabled: number;
+      totp_enabled: number;
+      created_at: string;
+      last_login_at: string | null;
+      household_id: number;
+      household_name: string;
+    }[];
+    return rows.map((r) => {
+      const devices = listDevices(r.household_id);
+      return {
+        id: r.id,
+        login: r.login,
+        name: r.name,
+        role: r.role,
+        disabled: !!r.disabled,
+        totpEnabled: !!r.totp_enabled,
+        createdAt: r.created_at,
+        lastLoginAt: r.last_login_at,
+        household: { id: r.household_id, name: r.household_name },
+        devices: devices.length,
+        devicesOnline: devices.filter(deviceOnline).length,
+      };
+    });
+  });
+
+  app.patch('/api/admin/users/:id', admin, async (req, reply) => {
+    const u = userParam(db, req.params);
+    const { disabled, role } = (req.body ?? {}) as Body;
+    if (u.id === req.user!.id && (disabled === true || role === 'user')) {
+      return reply.code(400).send({ error: 'self', message: 'Tu ne peux pas désactiver ton propre compte ni te retirer le rôle d’administrateur.' });
+    }
+    if (disabled !== undefined) {
+      db.prepare('UPDATE users SET disabled = ? WHERE id = ?').run(disabled ? 1 : 0, u.id);
+      if (disabled) deleteUserSessions(db, u.id);
+      logEvent(db, 'admin', 'warning', `Compte « ${u.login} » ${disabled ? 'désactivé' : 'réactivé'}`);
+    }
+    if (role !== undefined) {
+      if (role !== 'admin' && role !== 'user') throw new ValidationError('Rôle inconnu.');
+      db.prepare('UPDATE users SET role = ? WHERE id = ?').run(role, u.id);
+      logEvent(db, 'admin', 'warning', `Compte « ${u.login} » : rôle ${role === 'admin' ? 'administrateur' : 'utilisateur'}`);
+    }
     return { ok: true };
   });
 
-  app.post('/api/device/commands', auth, async (req) => {
-    const { type, text } = (req.body ?? {}) as Body;
-    return { id: queueCommand(db, type, text) };
-  });
-
-  app.get('/api/device/screenshot.jpg', auth, async (_req, reply) => {
-    const file = path.join(config.dataDir, 'screenshot.jpg');
-    if (!fs.existsSync(file)) return reply.code(404).send({ error: 'not_found', message: 'Aucune capture pour l’instant.' });
-    const st = fs.statSync(file);
-    reply.header('Cache-Control', 'no-store');
-    reply.header('Last-Modified', st.mtime.toUTCString());
-    reply.header('ETag', `"${st.size}-${st.mtimeMs.toFixed(0)}"`);
-    reply.header('Content-Length', String(st.size));
-    return reply.type('image/jpeg').send(fs.createReadStream(file));
-  });
-
-  // ------------------------------------------------------------ habitudes
-  app.get('/api/habits', auth, async (req) => {
-    const archived = (req.query as { archived?: string }).archived === '1';
-    const book = new HabitBook(db);
-    return book.habits.filter((h) => !!h.archived === archived).map((h) => toDto(book, h));
-  });
-
-  app.post('/api/habits', auth, async (req) => {
-    const id = createHabit(db, (req.body ?? {}) as Body);
-    const book = new HabitBook(db);
-    return toDto(book, book.habits.find((h) => h.id === id)!);
-  });
-
-  app.patch('/api/habits/:id', auth, async (req, reply) => {
-    const id = idParam(req.params);
-    if (!updateHabit(db, id, (req.body ?? {}) as Body)) return reply.code(404).send({ error: 'not_found', message: 'Habitude introuvable.' });
-    const book = new HabitBook(db);
-    return toDto(book, book.habits.find((h) => h.id === id)!);
-  });
-
-  app.delete('/api/habits/:id', auth, async (req, reply) => {
-    const id = idParam(req.params);
-    const ok = db.prepare('DELETE FROM habits WHERE id = ?').run(id).changes > 0;
-    if (!ok) return reply.code(404).send({ error: 'not_found', message: 'Habitude introuvable.' });
+  /** Supprime un compte et tout son foyer (données, écrans). */
+  app.delete('/api/admin/users/:id', admin, async (req, reply) => {
+    const u = userParam(db, req.params);
+    if (u.id === req.user!.id) return reply.code(400).send({ error: 'self', message: 'Tu ne peux pas supprimer ton propre compte.' });
+    const others = (db.prepare('SELECT COUNT(*) AS n FROM users WHERE household_id = ? AND id != ?').get(u.household_id, u.id) as { n: number }).n;
+    if (others === 0) {
+      removeHouseholdDeviceFiles(u.household_id);
+      deleteHousehold(u.household_id);
+    } else {
+      db.prepare('DELETE FROM users WHERE id = ?').run(u.id);
+    }
+    logEvent(db, 'admin', 'warning', `Compte « ${u.login} » supprimé${others === 0 ? ' avec son foyer' : ''}`);
     return { ok: true };
   });
 
-  app.post('/api/habits/reorder', auth, async (req) => {
-    const { ids } = (req.body ?? {}) as Body;
-    if (!Array.isArray(ids) || !ids.every((x) => Number.isInteger(x))) throw new ValidationError('Liste invalide.');
-    const upd = db.prepare('UPDATE habits SET position = ? WHERE id = ?');
-    db.transaction(() => ids.forEach((id, i) => upd.run(i, id)))();
+  /** Lien de réinitialisation du mot de passe (à transmettre à la personne). */
+  app.post('/api/admin/users/:id/reset-link', admin, async (req) => {
+    const u = userParam(db, req.params);
+    const inv = createInvite(db, { kind: 'reset', createdBy: req.user!.id, userId: u.id, days: 2 });
+    logEvent(db, 'admin', 'warning', `Lien de réinitialisation créé pour « ${u.login} »`);
+    return { url: inviteUrl(inv.token), expiresAt: inv.expiresAt };
+  });
+
+  // ------------------------------------------------------------ invitations
+  app.get('/api/admin/invites', admin, async () => {
+    const rows = db
+      .prepare(
+        `SELECT i.id, i.note, i.created_at, i.expires_at, i.used_at, u.login AS used_login
+         FROM invites i LEFT JOIN users u ON u.id = i.used_by WHERE i.kind = 'invite' ORDER BY i.id DESC LIMIT 50`,
+      )
+      .all() as { id: number; note: string; created_at: string; expires_at: string; used_at: string | null; used_login: string | null }[];
+    const now = Date.now();
+    return rows.map((r) => ({
+      id: r.id,
+      note: r.note,
+      createdAt: r.created_at,
+      expiresAt: r.expires_at,
+      usedAt: r.used_at,
+      usedBy: r.used_login,
+      status: r.used_at ? 'used' : new Date(r.expires_at).getTime() < now ? 'expired' : 'pending',
+    }));
+  });
+
+  app.post('/api/admin/invites', admin, async (req) => {
+    const { note, days } = (req.body ?? {}) as Body;
+    if (note !== undefined && (typeof note !== 'string' || note.length > 80)) throw new ValidationError('Note trop longue (80 caractères max).');
+    const d = days === undefined ? 7 : Number(days);
+    if (!Number.isInteger(d) || d < 1 || d > 30) throw new ValidationError('Validité entre 1 et 30 jours.');
+    const inv = createInvite(db, { kind: 'invite', createdBy: req.user!.id, note: (note as string) ?? '', days: d });
+    logEvent(db, 'admin', 'info', `Invitation créée${note ? ` (${note})` : ''}`);
+    return { id: inv.id, url: inviteUrl(inv.token), expiresAt: inv.expiresAt };
+  });
+
+  app.delete('/api/admin/invites/:id', admin, async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    const ok = db.prepare("DELETE FROM invites WHERE id = ? AND kind = 'invite' AND used_at IS NULL").run(id).changes > 0;
+    if (!ok) return reply.code(404).send({ error: 'not_found', message: 'Invitation introuvable ou déjà utilisée.' });
+    logEvent(db, 'admin', 'info', 'Invitation annulée');
     return { ok: true };
   });
 
-  app.get('/api/streak-settings', auth, async () => getStreakSettings(db));
-  app.put('/api/streak-settings', auth, async (req) => saveStreakSettings(db, (req.body ?? {}) as Body));
+  // ------------------------------------------------------------ services et clés d'application
+  app.get('/api/admin/services', admin, async () => listServices(db));
 
-  app.get('/api/badges', auth, async () => computeBadges(new HabitBook(db)));
-
-  app.get('/api/history', auth, async (req) => {
-    const days = Math.max(1, Math.min(365, Number((req.query as { days?: string }).days ?? 30) || 30));
-    return new HabitBook(db).history(days);
-  });
-
-  app.get('/api/sport-goal', auth, async () => ({ sportGoal: getSetting<number>(db, 'sportGoal', 12) }));
-  app.put('/api/sport-goal', auth, async (req) => {
-    const v = Number(((req.body ?? {}) as Body).sportGoal);
-    if (!Number.isInteger(v) || v < 1 || v > 62) throw new ValidationError('Objectif entre 1 et 62 séances.');
-    setSetting(db, 'sportGoal', v);
-    return { sportGoal: v };
+  app.put('/api/admin/services/:id', admin, async (req) => {
+    const id = serviceParam(req.params);
+    const identityChanged = updateService(db, id, (req.body ?? {}) as Body);
+    // Nouvelle app Spotify : les comptes connectés avec l'ancienne ne fonctionnent plus.
+    if (identityChanged && id === 'spotify') {
+      for (const h of listHouseholds()) forgetSpotifyAccount(makeContext(household(h.id), 'spotify'));
+      logEvent(db, 'admin', 'warning', 'Nouvelle app Spotify : chaque foyer doit reconnecter son compte');
+    }
+    return serviceDto(db, id);
   });
 
-  // ------------------------------------------------------------ réveils
-  app.get('/api/alarms', auth, async () => listAlarms(db));
-  app.post('/api/alarms', auth, async (req) => createAlarm(db, (req.body ?? {}) as Body));
-  app.patch('/api/alarms/:id', auth, async (req, reply) => {
-    const a = updateAlarm(db, idParam(req.params), (req.body ?? {}) as Body);
-    if (!a) return reply.code(404).send({ error: 'not_found', message: 'Alarme introuvable.' });
-    return a;
-  });
-  app.delete('/api/alarms/:id', auth, async (req, reply) => {
-    if (!deleteAlarm(db, idParam(req.params))) return reply.code(404).send({ error: 'not_found', message: 'Alarme introuvable.' });
-    return { ok: true };
-  });
-  app.get('/api/routine', auth, async () => getRoutine(db));
-  app.put('/api/routine', auth, async (req) => saveRoutine(db, (req.body ?? {}) as Body));
-
-  // ------------------------------------------------------------ appareil
-  app.get('/api/device', auth, async () => deviceInfo(db));
-  app.put('/api/device/settings', auth, async (req) => saveDisplay(db, (req.body ?? {}) as Body));
-  app.put('/api/device/layout', auth, async (req) => {
-    saveLayout(db, ((req.body ?? {}) as Body).widgets);
-    return { ok: true };
-  });
-  app.put('/api/device/pin', auth, async (req) => {
-    setPin(db, ((req.body ?? {}) as Body).pin);
-    return { ok: true };
-  });
-  app.post('/api/device/pairing-code', auth, async () => createPairingCode(db));
-  app.post('/api/device/regenerate-token', auth, async () => {
-    unpair(db);
-    return { ok: true };
-  });
-  app.delete('/api/device', auth, async () => {
-    unpair(db);
-    return { ok: true };
-  });
-
-  app.get('/api/backup', auth, async (_req, reply) => {
-    const name = `smart-dashboard-${new Date().toISOString().slice(0, 10)}.json`;
-    reply.header('Content-Disposition', `attachment; filename="${name}"`);
-    return exportBackup(db);
-  });
-  app.post('/api/backup', { ...auth, bodyLimit: 20 * 1024 * 1024 }, async (req) => {
-    importBackup(db, req.body);
-    return { ok: true };
-  });
-
-  // ------------------------------------------------------------ intégrations
-  app.get('/api/integrations', auth, async () => listIntegrations(db));
-
-  app.put('/api/integrations/:id', auth, async (req) => {
-    const id = integrationId(req.params);
-    updateIntegration(db, id, (req.body ?? {}) as Body);
-    // Mise à jour immédiate en arrière-plan.
-    void runIntegration(db, id, 'manual');
-    return integrationDto(db, getDef(id)!);
-  });
-
-  app.post('/api/integrations/:id/test', auth, async (req) => testIntegration(db, integrationId(req.params)));
-
-  app.post('/api/integrations/:id/refresh', auth, async (req, reply) => {
-    const res = await runIntegration(db, integrationId(req.params), 'manual');
-    if (!res.ok) return reply.code(502).send({ error: 'refresh_failed', message: res.message });
-    return { ok: true };
-  });
-
-  app.get('/api/integrations/:id/secret/:field', auth, async (req) => {
+  app.get('/api/admin/services/:id/secret/:field', admin, async (req) => {
     const { field } = req.params as { field: string };
-    return { value: revealSecret(db, integrationId(req.params), field) };
+    return { value: revealServiceSecret(db, serviceParam(req.params), field) };
   });
-
-  app.get('/api/integrations/spotify/connect', auth, async (_req, reply) => {
-    const ctx = makeContext(db, 'spotify');
-    if (!ctx.config.clientId || !ctx.secrets.clientSecret) {
-      return reply.redirect('/integrations?spotify=missing');
-    }
-    return reply.redirect(buildAuthorizeUrl(ctx.config.clientId));
-  });
-
-  // Callback OAuth : au retour de Spotify, le cookie SameSite=Strict n'est pas envoyé
-  // (navigation venant d'un autre site). Le paramètre `state`, émis lors de /connect
-  // par une session authentifiée et à usage unique, sert de preuve.
-  app.get('/api/oauth/spotify/callback', async (req, reply) => {
-    const q = req.query as { code?: string; state?: string; error?: string };
-    if (q.error || !q.code || !q.state || !consumeState(q.state)) {
-      logEvent(db, 'spotify', 'error', `Connexion Spotify refusée${q.error ? ` (${q.error})` : ''}`);
-      return reply.redirect('/integrations?spotify=error');
-    }
-    try {
-      const ctx = makeContext(db, 'spotify');
-      await exchangeCode(ctx, q.code);
-      db.prepare('UPDATE integrations SET enabled = 1, last_run_at = NULL WHERE id = ?').run('spotify');
-      logEvent(db, 'spotify', 'success', `Compte Spotify connecté (${ctx.config.account})`);
-      void runIntegration(db, 'spotify', 'manual');
-      return reply.redirect('/integrations?spotify=connected');
-    } catch (err) {
-      logEvent(db, 'spotify', 'error', `Connexion Spotify : ${errorMessage(err)}`);
-      return reply.redirect('/integrations?spotify=error');
-    }
-  });
-
-  app.post('/api/integrations/roblox/resolve', auth, async (req) => {
-    const { placeId } = (req.body ?? {}) as Body;
-    return resolvePlaceId(String(placeId ?? '').trim());
-  });
-
-  app.get('/api/integrations/pathe/cinemas', auth, async () => listCinemas(db));
-
-  app.get('/api/integrations/icloud/calendars', auth, async () => {
-    const ctx = makeContext(db, 'icloud');
-    if (getDef('icloud')!.missing(ctx)) throw new ConfigError('Enregistre d’abord ton identifiant Apple et ton mot de passe pour app.');
-    return listCalendars(ctx);
-  });
-
-  // Info appareil brute (utile au débogage depuis la console).
-  app.get('/api/device/raw', auth, async () => getDeviceRow(db));
 }

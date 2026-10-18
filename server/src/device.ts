@@ -1,8 +1,13 @@
+// Écrans (tablettes) : un foyer peut en avoir plusieurs. Chaque écran est enregistré dans
+// la base principale (jeton, état, réglages d'affichage, disposition de l'accueil) ; ses
+// réveils et commandes sont dans la base de son foyer (colonne device_id).
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import type { DB } from './db.js';
 import { getSetting, setSetting } from './db.js';
 import { config } from './config.js';
-import { randomToken, sha256, safeEqual } from './crypto.js';
+import { randomToken, sha256 } from './crypto.js';
 import { logEvent } from './events.js';
 import { ValidationError, HabitBook, computeBadges, computeStats, habitMeta } from './habits.js';
 import { getRoutine, listAlarms, nextAlarm } from './alarms.js';
@@ -13,6 +18,7 @@ import { cinemaForDevice } from './integrations/pathe.js';
 import { agendaForDevice } from './integrations/icloud.js';
 import { nowPlaying, type MusicState } from './integrations/spotify.js';
 import { errorMessage } from './http.js';
+import { household, main } from './households.js';
 
 // ---------------------------------------------------------------- réglages d'affichage
 
@@ -44,8 +50,7 @@ export const DEFAULT_DISPLAY: DisplaySettings = {
 
 const HM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
-export function getDisplay(db: DB): DisplaySettings {
-  const saved = getSetting<Partial<DisplaySettings>>(db, 'display', {});
+export function mergeDisplay(saved: Partial<DisplaySettings>): DisplaySettings {
   return { ...DEFAULT_DISPLAY, ...saved, nightMode: { ...DEFAULT_DISPLAY.nightMode, ...(saved.nightMode ?? {}) } };
 }
 
@@ -55,8 +60,9 @@ function intIn(v: unknown, min: number, max: number, label: string): number {
   return n;
 }
 
-export function saveDisplay(db: DB, input: Record<string, unknown>): DisplaySettings {
-  const next = getDisplay(db);
+/** Applique une modification validée aux réglages d'affichage d'un écran. */
+export function applyDisplay(current: DisplaySettings, input: Record<string, unknown>): DisplaySettings {
+  const next = mergeDisplay(JSON.parse(JSON.stringify(current)) as DisplaySettings);
   if ('brightness' in input) next.brightness = intIn(input.brightness, 5, 100, 'La luminosité');
   if ('theme' in input) {
     if (!['dark', 'light', 'auto'].includes(input.theme as string)) throw new ValidationError('Thème inconnu.');
@@ -83,7 +89,6 @@ export function saveDisplay(db: DB, input: Record<string, unknown>): DisplaySett
   if ('lockOnWake' in input) next.lockOnWake = !!input.lockOnWake;
   if ('lockAfterMinutes' in input) next.lockAfterMinutes = intIn(input.lockAfterMinutes, 0, 120, 'Le verrouillage');
   if ('pollSeconds' in input) next.pollSeconds = intIn(input.pollSeconds, 15, 900, 'La synchronisation');
-  setSetting(db, 'display', next);
   return next;
 }
 
@@ -114,11 +119,8 @@ export const DEFAULT_LAYOUT: Widget[] = [
   { id: 'roblox', span: 1 },
 ];
 
-export function getLayout(db: DB): Widget[] {
-  return getSetting<Widget[]>(db, 'layout', DEFAULT_LAYOUT);
-}
-
-export function saveLayout(db: DB, widgets: unknown): Widget[] {
+/** Vérifie une disposition de l'accueil (au plus 2 rangées de 4 cases). */
+export function validateLayout(widgets: unknown): Widget[] {
   if (!Array.isArray(widgets) || widgets.length === 0) throw new ValidationError('Disposition vide.');
   const seen = new Set<string>();
   let total = 0;
@@ -143,11 +145,10 @@ export function saveLayout(db: DB, widgets: unknown): Widget[] {
     col += w.span;
   }
   if (total > 8 || rowsUsed > 2) throw new ValidationError('L’accueil contient au plus 2 rangées de 4 cases.');
-  setSetting(db, 'layout', clean);
   return clean;
 }
 
-// ---------------------------------------------------------------- code PIN
+// ---------------------------------------------------------------- code PIN (commun au foyer)
 
 interface PinSetting {
   salt: string;
@@ -159,18 +160,21 @@ export function setPin(db: DB, pin: unknown): void {
   if (typeof pin !== 'string' || !/^\d{4,6}$/.test(pin)) throw new ValidationError('Le code doit contenir 4 à 6 chiffres.');
   const salt = crypto.randomBytes(16).toString('hex');
   setSetting(db, 'pin', { salt, hash: sha256(salt + pin), updatedAt: new Date().toISOString() } satisfies PinSetting);
-  logEvent(db, 'device', 'info', 'Code PIN de l’écran modifié');
+  logEvent(db, 'device', 'info', 'Code PIN des écrans modifié');
 }
 
 export function getPin(db: DB): PinSetting | null {
   return getSetting<PinSetting | null>(db, 'pin', null);
 }
 
-// ---------------------------------------------------------------- appairage
+// ---------------------------------------------------------------- écrans
 
-interface DeviceRow {
+export interface DeviceRow {
+  id: number;
+  household_id: number;
   name: string;
   token_hash: string | null;
+  created_at: string;
   paired_at: string | null;
   last_seen_at: string | null;
   last_sync_at: string | null;
@@ -180,67 +184,172 @@ interface DeviceRow {
   rssi: number | null;
   ip: string | null;
   screen: string | null;
+  display: string;
+  layout: string | null;
 }
 
-export function getDeviceRow(db: DB): DeviceRow {
-  return db.prepare('SELECT * FROM device WHERE id = 1').get() as DeviceRow;
+function parse<T>(s: string | null, fallback: T): T {
+  if (!s) return fallback;
+  try {
+    return JSON.parse(s) as T;
+  } catch {
+    return fallback;
+  }
 }
 
-export function createPairingCode(db: DB): { code: string; expiresAt: string } {
-  const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+export function getDevice(id: number): DeviceRow | undefined {
+  return main().prepare('SELECT * FROM devices WHERE id = ?').get(id) as DeviceRow | undefined;
+}
+
+/** Écran d'un foyer donné (undefined s'il appartient à un autre foyer). */
+export function getHouseholdDevice(householdId: number, id: number): DeviceRow | undefined {
+  return main().prepare('SELECT * FROM devices WHERE id = ? AND household_id = ?').get(id, householdId) as DeviceRow | undefined;
+}
+
+export function listDevices(householdId: number): DeviceRow[] {
+  return main().prepare('SELECT * FROM devices WHERE household_id = ? ORDER BY id').all(householdId) as DeviceRow[];
+}
+
+export function deviceDisplay(d: DeviceRow): DisplaySettings {
+  return mergeDisplay(parse<Partial<DisplaySettings>>(d.display, {}));
+}
+
+export function deviceLayout(d: DeviceRow): Widget[] {
+  return parse<Widget[] | null>(d.layout, null) ?? DEFAULT_LAYOUT;
+}
+
+export function saveDeviceDisplay(d: DeviceRow, input: Record<string, unknown>): DisplaySettings {
+  const next = applyDisplay(deviceDisplay(d), input);
+  main().prepare('UPDATE devices SET display = ? WHERE id = ?').run(JSON.stringify(next), d.id);
+  return next;
+}
+
+export function saveDeviceLayout(d: DeviceRow, widgets: unknown): Widget[] {
+  const clean = validateLayout(widgets);
+  main().prepare('UPDATE devices SET layout = ? WHERE id = ?').run(JSON.stringify(clean), d.id);
+  return clean;
+}
+
+export function renameDevice(d: DeviceRow, name: unknown): void {
+  if (typeof name !== 'string' || !name.trim() || name.trim().length > 40) throw new ValidationError('Le nom doit faire entre 1 et 40 caractères.');
+  main().prepare('UPDATE devices SET name = ? WHERE id = ?').run(name.trim(), d.id);
+}
+
+export function screenshotFile(deviceId: number): string {
+  return path.join(config.dataDir, 'screens', `${deviceId}.jpg`);
+}
+
+/** Retire un écran du foyer : ses réveils, ses commandes et sa dernière capture. */
+export function removeDevice(d: DeviceRow): void {
+  const db = household(d.household_id);
+  db.prepare('DELETE FROM alarms WHERE device_id = ?').run(d.id);
+  db.prepare('DELETE FROM commands WHERE device_id = ?').run(d.id);
+  db.prepare('DELETE FROM settings WHERE key = ?').run(`routine:${d.id}`);
+  main().prepare('DELETE FROM devices WHERE id = ?').run(d.id);
+  fs.rmSync(screenshotFile(d.id), { force: true });
+  logEvent(db, 'device', 'warning', `Écran « ${d.name} » retiré du foyer`);
+}
+
+export function removeHouseholdDeviceFiles(householdId: number): void {
+  for (const d of listDevices(householdId)) fs.rmSync(screenshotFile(d.id), { force: true });
+}
+
+// ---------------------------------------------------------------- appairage
+
+/**
+ * Code à 6 chiffres valable 10 minutes, pour associer un nouvel écran au foyer
+ * (ou ré-associer un écran existant : son jeton est alors remplacé).
+ */
+export function createPairingCode(householdId: number, opts: { deviceId?: number; name?: unknown } = {}): { code: string; expiresAt: string } {
+  const m = main();
+  if (opts.deviceId !== undefined && !getHouseholdDevice(householdId, opts.deviceId)) throw new ValidationError('Écran introuvable.');
+  const name = typeof opts.name === 'string' ? opts.name.trim().slice(0, 40) : '';
+  let code = '';
+  for (let i = 0; i < 20; i++) {
+    code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
+    if (!m.prepare('SELECT 1 FROM pairing_codes WHERE code_hash = ?').get(sha256(code))) break;
+  }
   const expiresAt = new Date(Date.now() + 10 * 60_000).toISOString();
-  db.prepare('DELETE FROM pairing_codes').run();
-  db.prepare('INSERT INTO pairing_codes (code_hash, expires_at) VALUES (?, ?)').run(sha256(code), expiresAt);
+  m.prepare('DELETE FROM pairing_codes WHERE household_id = ? OR expires_at < ?').run(householdId, new Date().toISOString());
+  m.prepare('INSERT INTO pairing_codes (code_hash, household_id, device_id, name, expires_at) VALUES (?, ?, ?, ?, ?)').run(
+    sha256(code),
+    householdId,
+    opts.deviceId ?? null,
+    name,
+    expiresAt,
+  );
   return { code, expiresAt };
 }
 
-export function pairDevice(db: DB, code: unknown, name: unknown, firmware: unknown): string | null {
+/** Échange un code contre le jeton de l'écran. */
+export function pairDevice(code: unknown, name: unknown, firmware: unknown): { token: string; device: DeviceRow } | null {
   if (typeof code !== 'string' || !/^\d{6}$/.test(code)) return null;
-  const row = db.prepare('SELECT expires_at FROM pairing_codes WHERE code_hash = ?').get(sha256(code)) as { expires_at: string } | undefined;
+  const m = main();
+  const row = m.prepare('SELECT * FROM pairing_codes WHERE code_hash = ?').get(sha256(code)) as
+    | { code_hash: string; household_id: number; device_id: number | null; name: string; expires_at: string }
+    | undefined;
   if (!row || new Date(row.expires_at).getTime() < Date.now()) return null;
   const token = `sdb_${randomToken(32)}`;
-  db.prepare('DELETE FROM pairing_codes').run();
-  db.prepare('UPDATE device SET token_hash = ?, paired_at = ?, name = ?, firmware = ? WHERE id = 1').run(
-    sha256(token),
-    new Date().toISOString(),
-    typeof name === 'string' && name.trim() ? name.trim().slice(0, 40) : 'Tab5',
-    typeof firmware === 'string' ? firmware.slice(0, 40) : null,
-  );
-  logEvent(db, 'device', 'success', 'Tablette associée');
-  return token;
+  const now = new Date().toISOString();
+  const fw = typeof firmware === 'string' ? firmware.slice(0, 40) : null;
+  const db = household(row.household_id);
+  let id: number;
+  m.prepare('DELETE FROM pairing_codes WHERE code_hash = ?').run(row.code_hash);
+  if (row.device_id && getHouseholdDevice(row.household_id, row.device_id)) {
+    id = row.device_id;
+    m.prepare('UPDATE devices SET token_hash = ?, paired_at = ?, firmware = COALESCE(?, firmware) WHERE id = ?').run(sha256(token), now, fw, id);
+    logEvent(db, 'device', 'success', `Écran « ${getDevice(id)!.name} » ré-associé`);
+  } else {
+    const count = listDevices(row.household_id).length;
+    const deviceName =
+      row.name || (typeof name === 'string' && name.trim() && name.trim() !== 'Tab5' ? name.trim().slice(0, 40) : count ? `Écran ${count + 1}` : 'Tab5');
+    // Les réglages d'affichage et la disposition du foyer servent de modèle au nouvel écran.
+    const display = JSON.stringify(mergeDisplay(getSetting<Partial<DisplaySettings>>(db, 'display', {})));
+    const layout = getSetting<Widget[] | null>(db, 'layout', null);
+    const res = m
+      .prepare('INSERT INTO devices (household_id, name, token_hash, created_at, paired_at, firmware, display, layout) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(row.household_id, deviceName, sha256(token), now, now, fw, display, layout ? JSON.stringify(layout) : null);
+    id = Number(res.lastInsertRowid);
+    // Réveils pas encore attribués (exemples du foyer, ancienne installation) : repris par cet écran.
+    db.prepare('UPDATE alarms SET device_id = ? WHERE device_id IS NULL').run(id);
+    logEvent(db, 'device', 'success', `Nouvel écran associé : « ${deviceName} »`);
+  }
+  return { token, device: getDevice(id)! };
 }
 
-export function checkDeviceToken(db: DB, header: string | undefined): boolean {
-  if (!header?.startsWith('Bearer ')) return false;
-  const stored = getDeviceRow(db).token_hash;
-  return !!stored && safeEqual(sha256(header.slice(7).trim()), stored);
+/** Écran correspondant à l'en-tête « Authorization: Bearer sdb_… ». */
+export function deviceFromAuthHeader(header: string | undefined): DeviceRow | null {
+  if (!header?.startsWith('Bearer ')) return null;
+  const token = header.slice(7).trim();
+  if (!token.startsWith('sdb_') || token.length > 100) return null;
+  return (main().prepare('SELECT * FROM devices WHERE token_hash = ?').get(sha256(token)) as DeviceRow | undefined) ?? null;
 }
 
-export function unpair(db: DB): void {
-  db.prepare('UPDATE device SET token_hash = NULL, paired_at = NULL WHERE id = 1').run();
-  logEvent(db, 'device', 'warning', 'Tablette désassociée : elle devra être ré-appairée');
-}
-
-export function recordHeartbeat(db: DB, body: Record<string, unknown>, ip: string): void {
+export function recordHeartbeat(d: DeviceRow, body: Record<string, unknown>, ip: string): void {
   const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : null);
-  db.prepare('UPDATE device SET last_seen_at = ?, battery = COALESCE(?, battery), charging = COALESCE(?, charging), firmware = COALESCE(?, firmware), rssi = COALESCE(?, rssi), ip = ?, screen = COALESCE(?, screen) WHERE id = 1').run(
-    new Date().toISOString(),
-    n(body.battery),
-    typeof body.charging === 'boolean' ? (body.charging ? 1 : 0) : null,
-    typeof body.firmware === 'string' ? body.firmware.slice(0, 40) : null,
-    n(body.rssi),
-    typeof body.ip === 'string' && body.ip ? body.ip.slice(0, 64) : ip,
-    typeof body.screen === 'string' ? body.screen.slice(0, 10) : null,
-  );
+  main()
+    .prepare(
+      'UPDATE devices SET last_seen_at = ?, battery = COALESCE(?, battery), charging = COALESCE(?, charging), firmware = COALESCE(?, firmware), rssi = COALESCE(?, rssi), ip = ?, screen = COALESCE(?, screen) WHERE id = ?',
+    )
+    .run(
+      new Date().toISOString(),
+      n(body.battery),
+      typeof body.charging === 'boolean' ? (body.charging ? 1 : 0) : null,
+      typeof body.firmware === 'string' ? body.firmware.slice(0, 40) : null,
+      n(body.rssi),
+      typeof body.ip === 'string' && body.ip ? body.ip.slice(0, 64) : ip,
+      typeof body.screen === 'string' ? body.screen.slice(0, 10) : null,
+      d.id,
+    );
   if (Array.isArray(body.ackCommands)) {
-    const ack = db.prepare('UPDATE commands SET acked_at = ? WHERE id = ? AND acked_at IS NULL');
-    for (const id of body.ackCommands.slice(0, 50)) if (Number.isInteger(id)) ack.run(new Date().toISOString(), id);
+    const ack = household(d.household_id).prepare('UPDATE commands SET acked_at = ? WHERE id = ? AND device_id = ? AND acked_at IS NULL');
+    for (const id of body.ackCommands.slice(0, 50)) if (Number.isInteger(id)) ack.run(new Date().toISOString(), id, d.id);
   }
 }
 
 export function deviceOnline(row: DeviceRow): boolean {
   if (!row.last_seen_at) return false;
-  const poll = 60;
+  const poll = deviceDisplay(row).pollSeconds;
   return Date.now() - new Date(row.last_seen_at).getTime() < Math.max(3 * poll, 180) * 1000;
 }
 
@@ -250,50 +359,70 @@ export function autonomyDays(battery: number | null): number | null {
   return Math.max(0, Math.round((battery / 100) * 11.5));
 }
 
-export function deviceInfo(db: DB) {
-  const row = getDeviceRow(db);
-  const pin = getPin(db);
+/** Résumé d'un écran (liste, vue d'ensemble). */
+export function deviceSummary(row: DeviceRow) {
   return {
-    paired: !!row.token_hash,
+    id: row.id,
     name: row.name,
+    paired: !!row.token_hash,
+    online: deviceOnline(row),
     firmware: row.firmware,
     lastSeenAt: row.last_seen_at,
     lastSyncAt: row.last_sync_at,
     battery: row.battery,
     charging: row.charging === null ? null : !!row.charging,
-    online: deviceOnline(row),
     rssi: row.rssi,
     ip: row.ip,
     autonomyDays: autonomyDays(row.battery),
+    pairedAt: row.paired_at,
+  };
+}
+
+/** Détail complet d'un écran pour la console. */
+export function deviceInfo(row: DeviceRow, db: DB) {
+  const layout = deviceLayout(row);
+  const pin = getPin(db);
+  return {
+    ...deviceSummary(row),
     pinSet: !!pin,
     pinUpdatedAt: pin?.updatedAt ?? null,
-    settings: getDisplay(db),
-    layout: getLayout(db),
+    settings: deviceDisplay(row),
+    layout,
     availableWidgets: Object.entries(WIDGETS)
-      .filter(([id]) => !getLayout(db).some((w) => w.id === id))
+      .filter(([id]) => !layout.some((w) => w.id === id))
       .map(([id, label]) => ({ id, label })),
   };
 }
 
 export const COMMAND_TYPES = ['wake', 'lock', 'reboot', 'message', 'reload', 'screenshot'] as const;
 
-export function queueCommand(db: DB, type: unknown, text: unknown): number {
+export function queueCommand(db: DB, d: DeviceRow, type: unknown, text: unknown): number {
   if (!COMMAND_TYPES.includes(type as (typeof COMMAND_TYPES)[number])) throw new ValidationError('Commande inconnue.');
   if (type === 'message' && (typeof text !== 'string' || !text.trim() || text.length > 140)) {
     throw new ValidationError('Le message doit faire entre 1 et 140 caractères.');
   }
-  const res = db.prepare('INSERT INTO commands (type, text, created_at) VALUES (?, ?, ?)').run(
+  const res = db.prepare('INSERT INTO commands (type, text, created_at, device_id) VALUES (?, ?, ?, ?)').run(
     type,
     type === 'message' ? (text as string).trim() : null,
     new Date().toISOString(),
+    d.id,
   );
-  logEvent(db, 'console', 'info', type === 'message' ? `Message envoyé à l’écran : « ${(text as string).trim()} »` : `Commande envoyée à l’écran : ${type}`);
+  logEvent(db, 'console', 'info', type === 'message' ? `Message envoyé à « ${d.name} » : « ${(text as string).trim()} »` : `Commande envoyée à « ${d.name} » : ${type}`);
   return Number(res.lastInsertRowid);
 }
 
-function pendingCommands(db: DB) {
+/** Message pour tous les écrans du foyer (ex. alerte cinéma). */
+export function broadcastMessage(db: DB, householdId: number, text: string): void {
+  const ins = db.prepare('INSERT INTO commands (type, text, created_at, device_id) VALUES (?, ?, ?, ?)');
+  const now = new Date().toISOString();
+  for (const d of listDevices(householdId)) ins.run('message', text, now, d.id);
+}
+
+function pendingCommands(db: DB, deviceId: number) {
   const since = new Date(Date.now() - 24 * 3600_000).toISOString();
-  return db.prepare('SELECT id, type, text FROM commands WHERE acked_at IS NULL AND created_at >= ? ORDER BY id').all(since) as {
+  return db
+    .prepare('SELECT id, type, text FROM commands WHERE acked_at IS NULL AND device_id = ? AND created_at >= ? ORDER BY id')
+    .all(deviceId, since) as {
     id: number;
     type: string;
     text: string | null;
@@ -335,29 +464,31 @@ async function musicForDevice(db: DB): Promise<MusicState | null> {
   }
 }
 
-export async function buildDeviceState(db: DB) {
+export async function buildDeviceState(d: DeviceRow) {
+  const db = household(d.household_id);
   const book = new HabitBook(db);
-  const display = getDisplay(db);
+  const display = deviceDisplay(d);
   const pin = getPin(db);
-  const alarms = listAlarms(db);
+  const alarms = listAlarms(db, d.id);
   const next = nextAlarm(alarms);
-  db.prepare('UPDATE device SET last_sync_at = ? WHERE id = 1').run(new Date().toISOString());
+  main().prepare('UPDATE devices SET last_sync_at = ? WHERE id = ?').run(new Date().toISOString(), d.id);
   return {
     serverTime: Math.floor(Date.now() / 1000),
     tz: config.tz,
     tzPosix: config.tzPosix,
+    device: { id: d.id, name: d.name },
     settings: { ...display, pinSalt: pin?.salt ?? '', pinHash: pin?.hash ?? '' },
-    layout: getLayout(db),
+    layout: deviceLayout(d),
     weather: isEnabled(db, 'weather') ? weatherForDevice(db) : null,
     agenda: isEnabled(db, 'icloud') ? agendaForDevice(db) : null,
     tasks: tasksForDevice(db, book),
     alarms,
     nextAlarm: next ? { at: Math.floor(next.at / 1000), label: next.label, time: next.time } : null,
-    routine: getRoutine(db),
+    routine: getRoutine(db, d.id),
     music: await musicForDevice(db),
     roblox: isEnabled(db, 'roblox') ? robloxForDevice(db) : null,
     cinema: isEnabled(db, 'pathe') ? cinemaForDevice(db) : null,
     stats: computeStats(db, book, getSetting<number>(db, 'sportGoal', 12)),
-    commands: pendingCommands(db),
+    commands: pendingCommands(db, d.id),
   };
 }

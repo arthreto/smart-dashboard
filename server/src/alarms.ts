@@ -7,6 +7,7 @@ export const ALARM_SOUNDS = ['aube', 'carillon', 'pulsation', 'douce'] as const;
 
 interface AlarmRow {
   id: number;
+  device_id: number | null;
   time: string;
   label: string;
   days: number;
@@ -17,6 +18,7 @@ interface AlarmRow {
 
 export interface AlarmDto {
   id: number;
+  deviceId: number | null;
   time: string;
   label: string;
   days: boolean[];
@@ -35,11 +37,16 @@ export interface AlarmInput {
 }
 
 function toDto(r: AlarmRow): AlarmDto {
-  return { id: r.id, time: r.time, label: r.label, days: daysFromMask(r.days), sound: r.sound, enabled: !!r.enabled, snoozeMinutes: r.snooze_minutes };
+  return { id: r.id, deviceId: r.device_id, time: r.time, label: r.label, days: daysFromMask(r.days), sound: r.sound, enabled: !!r.enabled, snoozeMinutes: r.snooze_minutes };
 }
 
-export function listAlarms(db: DB): AlarmDto[] {
-  return (db.prepare('SELECT * FROM alarms ORDER BY time, id').all() as AlarmRow[]).map(toDto);
+/** Réveils d'un écran (ou de tout le foyer si deviceId est omis). */
+export function listAlarms(db: DB, deviceId?: number): AlarmDto[] {
+  const rows =
+    deviceId === undefined
+      ? (db.prepare('SELECT * FROM alarms ORDER BY time, id').all() as AlarmRow[])
+      : (db.prepare('SELECT * FROM alarms WHERE device_id = ? ORDER BY time, id').all(deviceId) as AlarmRow[]);
+  return rows.map(toDto);
 }
 
 export function getAlarm(db: DB, id: number): AlarmDto | null {
@@ -59,10 +66,10 @@ function validate(input: AlarmInput, partial: boolean): void {
   }
 }
 
-export function createAlarm(db: DB, input: AlarmInput): AlarmDto {
+export function createAlarm(db: DB, input: AlarmInput, deviceId: number | null = null): AlarmDto {
   validate(input, false);
   const res = db
-    .prepare('INSERT INTO alarms (time, label, days, sound, enabled, snooze_minutes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+    .prepare('INSERT INTO alarms (time, label, days, sound, enabled, snooze_minutes, created_at, device_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
     .run(
       input.time,
       (input.label ?? '').trim(),
@@ -71,6 +78,7 @@ export function createAlarm(db: DB, input: AlarmInput): AlarmDto {
       input.enabled === false ? 0 : 1,
       input.snoozeMinutes ?? 9,
       new Date().toISOString(),
+      deviceId,
     );
   return getAlarm(db, Number(res.lastInsertRowid))!;
 }
@@ -123,12 +131,14 @@ export interface Routine {
 
 export const DEFAULT_ROUTINE: Routine = { enabled: true, preLightMinutes: 10, showBriefing: true, waterReminder: true };
 
-export function getRoutine(db: DB): Routine {
-  return { ...DEFAULT_ROUTINE, ...getSetting<Partial<Routine>>(db, 'routine', {}) };
+/** Routine matinale d'un écran (à défaut, celle de l'ancienne installation mono-écran). */
+export function getRoutine(db: DB, deviceId: number): Routine {
+  const legacy = getSetting<Partial<Routine>>(db, 'routine', {});
+  return { ...DEFAULT_ROUTINE, ...legacy, ...getSetting<Partial<Routine>>(db, `routine:${deviceId}`, {}) };
 }
 
-export function saveRoutine(db: DB, input: Partial<Routine>): Routine {
-  const next = { ...getRoutine(db) };
+export function saveRoutine(db: DB, deviceId: number, input: Partial<Routine>): Routine {
+  const next = { ...getRoutine(db, deviceId) };
   if (input.enabled !== undefined) next.enabled = !!input.enabled;
   if (input.showBriefing !== undefined) next.showBriefing = !!input.showBriefing;
   if (input.waterReminder !== undefined) next.waterReminder = !!input.waterReminder;
@@ -137,6 +147,6 @@ export function saveRoutine(db: DB, input: Partial<Routine>): Routine {
     if (!Number.isInteger(v) || v < 0 || v > 30) throw new ValidationError('Pré-éclairage entre 0 et 30 minutes.');
     next.preLightMinutes = v;
   }
-  setSetting(db, 'routine', next);
+  setSetting(db, `routine:${deviceId}`, next);
   return next;
 }

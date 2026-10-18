@@ -1,28 +1,29 @@
 import { config } from './config.js';
-import { openDb } from './db.js';
 import { masterKey } from './crypto.js';
 import { buildApp } from './app.js';
-import { tick } from './integrations/index.js';
+import { tickAll } from './integrations/index.js';
+import { openMain } from './bootstrap.js';
+import { closeAll } from './households.js';
 import { purgeExpiredSessions } from './auth.js';
 import { pruneImageCache } from './images.js';
 import { logEvent } from './events.js';
 
 async function main() {
   masterKey(); // crée ou vérifie la clé de chiffrement dès le démarrage
-  const db = openDb();
+  const db = openMain();
   const app = await buildApp(db);
 
   await app.listen({ port: config.port, host: config.host });
   app.log.info(`Smart Dashboard prêt sur ${config.publicUrl} (écoute ${config.host}:${config.port}, fuseau ${config.tz})`);
   logEvent(db, 'server', 'info', 'Serveur démarré');
 
-  // Planificateur des intégrations : vérifie toutes les 15 s ce qui doit être rafraîchi.
+  // Planificateur des intégrations : vérifie toutes les 15 s, foyer par foyer, ce qui doit être rafraîchi.
   let busy = false;
   const run = async () => {
     if (busy) return;
     busy = true;
     try {
-      await tick(db);
+      await tickAll((err, householdId) => app.log.error(err, `tick foyer ${householdId}`));
     } catch (err) {
       app.log.error(err, 'tick');
     } finally {
@@ -41,7 +42,7 @@ async function main() {
     clearInterval(timer);
     clearInterval(housekeeping);
     await app.close();
-    db.close();
+    closeAll();
     process.exit(0);
   };
   process.on('SIGINT', () => void shutdown('SIGINT'));

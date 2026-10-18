@@ -24,6 +24,10 @@ export interface ActionDef {
 
 export interface IntegrationContext {
   db: DB;
+  /** Foyer concerné (0 hors foyer, dans certains tests). */
+  householdId: number;
+  /** Identifiants d'application fournis par l'administrateur (ex. app Spotify). */
+  app: Record<string, string>;
   config: Record<string, any>;
   secrets: Record<string, string>;
   saveConfig(patch: Record<string, unknown>): void;

@@ -7,6 +7,7 @@ import { addDays, dateKey, formatDuration, parseDateKey, WEEKDAY_SHORT, weekdayI
 import { logEvent } from '../events.js';
 import { HttpError, fetchJson, mapLimit } from '../http.js';
 import { imageUrlFor } from '../images.js';
+import { householdIdOf, mainOrNull } from '../households.js';
 import { ConfigError, str, type IntegrationDef } from './types.js';
 
 const BASE = 'https://www.pathe.fr/api';
@@ -188,7 +189,10 @@ function processAlerts(db: DB, data: CinemaData): void {
     const film = data.films.find((f) => f.id === a.film_id);
     if (!film) continue;
     const text = `« ${film.title} » est à l’affiche au ${data.cinemaName}`;
-    db.prepare('INSERT INTO commands (type, text, created_at) VALUES (?, ?, ?)').run('message', text, new Date().toISOString());
+    // Message sur chacun des écrans du foyer.
+    const devices = (mainOrNull()?.prepare('SELECT id FROM devices WHERE household_id = ?').all(householdIdOf(db)) ?? []) as { id: number }[];
+    const ins = db.prepare('INSERT INTO commands (type, text, created_at, device_id) VALUES (?, ?, ?, ?)');
+    for (const d of devices) ins.run('message', text, new Date().toISOString(), d.id);
     db.prepare('UPDATE cinema_alerts SET notified = 1 WHERE film_id = ?').run(a.film_id);
     logEvent(db, 'pathe', 'info', text);
   }

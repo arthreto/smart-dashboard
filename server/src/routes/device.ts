@@ -1,51 +1,71 @@
+// API de la tablette (/api/v1) : chaque écran s'authentifie avec son jeton et ne voit que
+// les données de son foyer, ses réveils et ses réglages.
 import fs from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { DB } from '../db.js';
-import { config } from '../config.js';
-import { buildDeviceState, checkDeviceToken, pairDevice, recordHeartbeat, saveDisplay, tasksForDevice } from '../device.js';
+import {
+  buildDeviceState,
+  deviceFromAuthHeader,
+  pairDevice,
+  recordHeartbeat,
+  saveDeviceDisplay,
+  screenshotFile,
+  tasksForDevice,
+  type DeviceRow,
+} from '../device.js';
 import { HabitBook, ValidationError, setHabitDone } from '../habits.js';
-import { updateAlarm } from '../alarms.js';
+import { getAlarm, updateAlarm } from '../alarms.js';
 import { getDef, isEnabled, makeContext } from '../integrations/index.js';
 import { control } from '../integrations/spotify.js';
 import { setCinemaAlert } from '../integrations/pathe.js';
 import { isAllowedImage, processImage, rgb565ToJpeg } from '../images.js';
 import { logEvent } from '../events.js';
 import { HttpError } from '../http.js';
+import { household } from '../households.js';
 
 type Body = Record<string, unknown>;
 
-export function deviceRoutes(app: FastifyInstance, db: DB): void {
+declare module 'fastify' {
+  interface FastifyRequest {
+    device?: DeviceRow;
+  }
+}
+
+export function deviceRoutes(app: FastifyInstance, mainDb: DB): void {
   async function requireDevice(req: FastifyRequest, reply: FastifyReply) {
-    if (!checkDeviceToken(db, req.headers.authorization)) {
+    const d = deviceFromAuthHeader(req.headers.authorization);
+    if (!d) {
       await reply.code(401).send({ error: 'device_unauthorized', message: 'Jeton de la tablette invalide : ré-appaire l’écran.' });
       return;
     }
-    req.deviceAuthed = true;
+    req.device = d;
+    req.hdb = household(d.household_id);
   }
   const dev = { preHandler: requireDevice };
 
   app.post('/api/v1/pair', { config: { rateLimit: { max: 5, timeWindow: '10 minutes' } } }, async (req, reply) => {
     const { code, name, firmware } = (req.body ?? {}) as Body;
-    const token = pairDevice(db, code, name, firmware);
-    if (!token) {
-      logEvent(db, 'device', 'warning', `Code d’appairage refusé (${req.ip})`);
+    const res = pairDevice(code, name, firmware);
+    if (!res) {
+      logEvent(mainDb, 'device', 'warning', `Code d’appairage refusé (${req.ip})`);
       return reply.code(401).send({ error: 'invalid_code', message: 'Code invalide ou expiré.' });
     }
-    return { token };
+    return { token: res.token };
   });
 
-  app.get('/api/v1/state', dev, async () => buildDeviceState(db));
+  app.get('/api/v1/state', dev, async (req) => buildDeviceState(req.device!));
 
   app.post('/api/v1/heartbeat', dev, async (req) => {
-    recordHeartbeat(db, (req.body ?? {}) as Body, req.ip);
+    recordHeartbeat(req.device!, (req.body ?? {}) as Body, req.ip);
     return { ok: true };
   });
 
-  // Réglages modifiés directement sur l'écran (luminosité, thème, veille…).
-  app.put('/api/v1/settings', dev, async (req) => saveDisplay(db, (req.body ?? {}) as Body));
+  // Réglages modifiés directement sur l'écran (luminosité, thème, veille…) : cet écran seulement.
+  app.put('/api/v1/settings', dev, async (req) => saveDeviceDisplay(req.device!, (req.body ?? {}) as Body));
 
   app.post('/api/v1/habits/:id/toggle', dev, async (req, reply) => {
+    const db = req.hdb!;
     const id = Number((req.params as { id: string }).id);
     const book = new HabitBook(db);
     const habit = book.active.find((h) => h.id === id);
@@ -60,12 +80,13 @@ export function deviceRoutes(app: FastifyInstance, db: DB): void {
     const id = Number((req.params as { id: string }).id);
     const { enabled } = (req.body ?? {}) as Body;
     if (typeof enabled !== 'boolean') throw new ValidationError('« enabled » doit être un booléen.');
-    const a = updateAlarm(db, id, { enabled });
-    if (!a) return reply.code(404).send({ error: 'not_found', message: 'Alarme introuvable.' });
-    return a;
+    const current = Number.isInteger(id) ? getAlarm(req.hdb!, id) : null;
+    if (!current || current.deviceId !== req.device!.id) return reply.code(404).send({ error: 'not_found', message: 'Alarme introuvable.' });
+    return updateAlarm(req.hdb!, id, { enabled });
   });
 
   app.post('/api/v1/music/:action', dev, async (req) => {
+    const db = req.hdb!;
     if (!isEnabled(db, 'spotify')) throw new HttpError(409, '', 'Spotify n’est pas activé dans la console.');
     const ctx = makeContext(db, 'spotify');
     const missing = getDef('spotify')!.missing(ctx);
@@ -76,7 +97,7 @@ export function deviceRoutes(app: FastifyInstance, db: DB): void {
 
   app.post('/api/v1/cinema/notify/:id', dev, async (req) => {
     const { id } = req.params as { id: string };
-    setCinemaAlert(db, id, !!((req.body ?? {}) as Body).notify);
+    setCinemaAlert(req.hdb!, id, !!((req.body ?? {}) as Body).notify);
     return { ok: true };
   });
 
@@ -98,8 +119,9 @@ export function deviceRoutes(app: FastifyInstance, db: DB): void {
     const body = req.body as Buffer;
     if (!Buffer.isBuffer(body)) return reply.code(400).send({ error: 'bad_body', message: 'Corps binaire attendu.' });
     const jpg = await rgb565ToJpeg(body, w, h);
-    fs.mkdirSync(config.dataDir, { recursive: true });
-    fs.writeFileSync(path.join(config.dataDir, 'screenshot.jpg'), jpg);
+    const file = screenshotFile(req.device!.id);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, jpg);
     return { ok: true };
   });
 }

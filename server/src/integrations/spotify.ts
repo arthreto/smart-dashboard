@@ -3,7 +3,7 @@ import { config as appConfig } from '../config.js';
 import { HttpError, fetchJson, fetchRaw } from '../http.js';
 import { randomToken } from '../crypto.js';
 import { imageUrlFor } from '../images.js';
-import { str, type IntegrationContext, type IntegrationDef } from './types.js';
+import { type IntegrationContext, type IntegrationDef } from './types.js';
 
 const SCOPES = [
   'user-read-playback-state',
@@ -17,14 +17,15 @@ export function redirectUri(): string {
   return `${appConfig.publicUrl}/api/oauth/spotify/callback`;
 }
 
-// États OAuth en attente (anti-CSRF), valables 10 minutes.
-const pendingStates = new Map<string, number>();
+// États OAuth en attente (anti-CSRF), valables 10 minutes : chacun se souvient du foyer
+// qui a lancé la connexion (l'application Spotify est commune à tout le serveur).
+const pendingStates = new Map<string, { exp: number; householdId: number }>();
 
-export function buildAuthorizeUrl(clientId: string): string {
+export function buildAuthorizeUrl(clientId: string, householdId: number): string {
   const state = randomToken(16);
   const now = Date.now();
-  for (const [k, exp] of pendingStates) if (exp < now) pendingStates.delete(k);
-  pendingStates.set(state, now + 10 * 60_000);
+  for (const [k, v] of pendingStates) if (v.exp < now) pendingStates.delete(k);
+  pendingStates.set(state, { exp: now + 10 * 60_000, householdId });
   const url = new URL('https://accounts.spotify.com/authorize');
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('client_id', clientId);
@@ -34,10 +35,11 @@ export function buildAuthorizeUrl(clientId: string): string {
   return url.toString();
 }
 
-export function consumeState(state: string): boolean {
-  const exp = pendingStates.get(state);
+/** Foyer associé à un état OAuth valide (usage unique), ou null. */
+export function consumeState(state: string): number | null {
+  const v = pendingStates.get(state);
   pendingStates.delete(state);
-  return !!exp && exp > Date.now();
+  return v && v.exp > Date.now() ? v.householdId : null;
 }
 
 interface TokenResponse {
@@ -47,7 +49,7 @@ interface TokenResponse {
 }
 
 async function tokenRequest(ctx: IntegrationContext, params: URLSearchParams): Promise<TokenResponse> {
-  const basic = Buffer.from(`${ctx.config.clientId}:${ctx.secrets.clientSecret}`).toString('base64');
+  const basic = Buffer.from(`${ctx.app.clientId}:${ctx.app.clientSecret}`).toString('base64');
   return fetchJson<TokenResponse>('https://accounts.spotify.com/api/token', {
     method: 'POST',
     headers: { Authorization: `Basic ${basic}`, 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -181,10 +183,12 @@ async function setSaved(ctx: IntegrationContext, trackId: string, saved: boolean
   }
 }
 
-let nowCache: { at: number; value: MusicState } | null = null;
+// Lecture en cours, gardée 4 s par foyer (plusieurs écrans interrogent en même temps).
+const nowCache = new Map<number, { at: number; value: MusicState }>();
 
 export async function nowPlaying(ctx: IntegrationContext, fresh = false): Promise<MusicState> {
-  if (!fresh && nowCache && Date.now() - nowCache.at < 4000) return nowCache.value;
+  const cached = nowCache.get(ctx.householdId);
+  if (!fresh && cached && Date.now() - cached.at < 4000) return cached.value;
   const player = await api<PlayerState | undefined>(ctx, '/me/player?additional_types=track,episode');
   let value: MusicState;
   if (!player || !player.item) {
@@ -221,12 +225,12 @@ export async function nowPlaying(ctx: IntegrationContext, fresh = false): Promis
       queue,
     };
   }
-  nowCache = { at: Date.now(), value };
+  nowCache.set(ctx.householdId, { at: Date.now(), value });
   return value;
 }
 
 export async function control(ctx: IntegrationContext, action: string, value?: unknown): Promise<MusicState> {
-  const current = nowCache?.value;
+  const current = nowCache.get(ctx.householdId)?.value;
   switch (action) {
     case 'play':
       await api(ctx, '/me/player/play', 'PUT');
@@ -265,18 +269,19 @@ export const spotify: IntegrationDef = {
   id: 'spotify',
   name: 'Spotify',
   description: 'Lecture, file d’attente et commandes',
-  defaults: { clientId: '', account: '', product: '' },
-  secretFields: ['clientSecret'],
+  defaults: { account: '', product: '' },
+  secretFields: [],
   fields: () => [
-    { key: 'clientId', label: 'Client ID', type: 'text', mono: true, copyable: true, placeholder: 'Depuis developer.spotify.com' },
-    { key: 'clientSecret', label: 'Client Secret', type: 'secret' },
-    { key: 'redirectUri', label: 'URI de redirection (à copier dans ton app Spotify)', type: 'readonly', mono: true, copyable: true },
     { key: 'account', label: 'Compte connecté', type: 'readonly' },
+    { key: 'appStatus', label: 'Application Spotify du serveur', type: 'readonly' },
   ],
-  actions: (ctx) => [{ id: 'connect', label: ctx.secrets.refreshToken ? 'Reconnecter le compte' : 'Connecter le compte Spotify' }],
+  actions: (ctx) =>
+    ctx.app.clientId && ctx.app.clientSecret
+      ? [{ id: 'connect', label: ctx.secrets.refreshToken ? 'Reconnecter le compte' : 'Connecter mon compte Spotify' }]
+      : [],
   missing(ctx) {
-    if (!ctx.config.clientId || !ctx.secrets.clientSecret) return 'Renseigne le Client ID et le Client Secret de ton app Spotify.';
-    if (!ctx.secrets.refreshToken) return 'Clique sur « Connecter le compte Spotify ».';
+    if (!ctx.app.clientId || !ctx.app.clientSecret) return 'L’administrateur n’a pas encore configuré l’application Spotify du serveur.';
+    if (!ctx.secrets.refreshToken) return 'Clique sur « Connecter mon compte Spotify ».';
     return null;
   },
   // Simple vérification périodique du jeton ; la lecture en cours est lue à la demande.
@@ -292,12 +297,20 @@ export const spotify: IntegrationDef = {
     const me = await api<SpotifyMe>(ctx, '/me');
     return `Compte ${me.display_name}${me.product ? ` (${me.product === 'premium' ? 'Premium' : me.product})` : ''}`;
   },
-  sanitizeConfig(patch) {
-    const out: Record<string, unknown> = {};
-    if ('clientId' in patch) out.clientId = str(patch.clientId, 64);
-    return out;
+  sanitizeConfig() {
+    return {};
   },
-  computed: (ctx) => ({ redirectUri: redirectUri(), account: ctx.config.account ? `${ctx.config.account}${ctx.config.product === 'premium' ? ' · Premium' : ''}` : 'Non connecté' }),
+  computed: (ctx) => ({
+    account: ctx.config.account ? `${ctx.config.account}${ctx.config.product === 'premium' ? ' · Premium' : ''}` : 'Non connecté',
+    appStatus: ctx.app.clientId && ctx.app.clientSecret ? 'Configurée par l’administrateur' : 'Pas encore configurée par l’administrateur',
+  }),
 };
+
+/** L'application Spotify a changé : les connexions des foyers ne sont plus valables. */
+export function forgetSpotifyAccount(ctx: IntegrationContext): void {
+  ctx.saveSecrets({ accessToken: null, refreshToken: null, accessExpiresAt: null });
+  ctx.saveConfig({ account: '', product: '' });
+  nowCache.delete(ctx.householdId);
+}
 
 export type { DB };

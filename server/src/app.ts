@@ -9,13 +9,15 @@ import { config } from './config.js';
 import { SESSION_COOKIE, findSession } from './auth.js';
 import { ValidationError } from './habits.js';
 import { ConfigError } from './integrations/types.js';
-import { HttpError } from './http.js';
+import { HttpError, NotFoundError } from './http.js';
 import { authRoutes } from './routes/auth.js';
 import { adminRoutes } from './routes/admin.js';
+import { householdRoutes } from './routes/household.js';
 import { deviceRoutes } from './routes/device.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+/** `db` est la base principale (comptes, foyers, écrans) ; voir households.ts pour les foyers. */
 export async function buildApp(db: DB, opts: { logger?: boolean } = {}): Promise<FastifyInstance> {
   const app = Fastify({
     logger: opts.logger === false ? false : { level: config.logLevel, redact: ['req.headers.authorization', 'req.headers.cookie'] },
@@ -32,7 +34,11 @@ export async function buildApp(db: DB, opts: { logger?: boolean } = {}): Promise
   // Session de la console (cookie) disponible sur toutes les requêtes.
   app.addHook('onRequest', async (req) => {
     const token = req.cookies[SESSION_COOKIE];
-    if (token) req.session = findSession(db, token) ?? undefined;
+    const found = token ? findSession(db, token) : null;
+    if (found) {
+      req.session = found.session;
+      req.user = found.user;
+    }
   });
 
   // Protection CSRF : en-tête personnalisé obligatoire pour les modifications depuis la console.
@@ -62,6 +68,7 @@ export async function buildApp(db: DB, opts: { logger?: boolean } = {}): Promise
     if (err instanceof ValidationError || err instanceof ConfigError) {
       return reply.code(400).send({ error: 'invalid', message: err.message });
     }
+    if (err instanceof NotFoundError) return reply.code(404).send({ error: 'not_found', message: err.message });
     if (err instanceof HttpError) {
       const code = err.status === 409 || err.status === 400 ? err.status : 502;
       return reply.code(code).send({ error: 'upstream', message: err.message });
@@ -78,6 +85,7 @@ export async function buildApp(db: DB, opts: { logger?: boolean } = {}): Promise
   app.get('/api/health', async () => ({ ok: true, time: new Date().toISOString() }));
 
   authRoutes(app, db);
+  householdRoutes(app, db);
   adminRoutes(app, db);
   deviceRoutes(app, db);
 

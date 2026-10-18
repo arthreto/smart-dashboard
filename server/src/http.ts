@@ -1,3 +1,6 @@
+/** Ressource absente (ou appartenant à un autre foyer) : réponse 404. */
+export class NotFoundError extends Error {}
+
 export class HttpError extends Error {
   constructor(
     readonly status: number,
