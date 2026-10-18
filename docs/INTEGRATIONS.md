@@ -1,9 +1,19 @@
 # Brancher les services
 
-Tout se règle dans la console web, page **Intégrations**. Chaque carte indique ce
-qui manque, un bouton **Tester** et l'état de la dernière mise à jour. Les secrets
-(Client Secret, mot de passe iCloud…) sont chiffrés sur le serveur et ne sont
-jamais envoyés à la tablette.
+Deux niveaux :
+
+- **L'administrateur** (toi) choisit, une fois pour tout le serveur, les services
+  proposés aux foyers et renseigne les clés d'application communes : page
+  **Administration › Clés API & services**. Aujourd'hui, seul Spotify en a besoin
+  (une « app » Spotify pour tout le serveur).
+- **Chaque foyer** connecte ses propres comptes et choisit ses réglages dans sa page
+  **Services** : son compte Spotify, son identifiant iCloud, son cinéma, son jeu
+  Roblox, sa ville. Ces réglages sont partagés par tous les écrans du foyer et
+  invisibles pour les autres foyers (et pour l'administrateur).
+
+Chaque carte indique ce qui manque, un bouton **Tester** et l'état de la dernière
+mise à jour. Les secrets (Client Secret, mot de passe iCloud…) sont chiffrés sur le
+serveur et ne sont jamais envoyés aux écrans.
 
 ## Météo (Open-Meteo)
 
@@ -13,28 +23,40 @@ logement (clic droit sur Google Maps → les deux nombres affichés, par exemple
 
 ## Spotify — lecture en cours et commandes
 
+### Une fois, par l'administrateur : l'app Spotify du serveur
+
 1. Va sur <https://developer.spotify.com/dashboard> et connecte-toi avec ton compte
    Spotify (**Premium obligatoire** : depuis février 2026, le propriétaire d'une app
-   en « Development Mode » doit avoir un abonnement Premium, et les commandes de
-   lecture l'exigent aussi).
+   en « Development Mode » doit avoir un abonnement Premium).
 2. **Create app** :
    - *App name* : `Smart Dashboard` (au choix), *App description* : au choix ;
-   - *Redirect URI* : copie celle affichée dans la console, carte Spotify, champ
-     « URI de redirection » — de la forme
+   - *Redirect URI* : copie celle affichée dans la console, **Administration › Clés
+     API & services**, carte Spotify, champ « URI de redirection » — de la forme
      `https://dashboard.mon-domaine.fr/api/oauth/spotify/callback` ;
    - *Which API/SDKs are you planning to use?* : coche **Web API** ;
    - accepte les conditions puis **Save**.
 3. Dans **Settings** de l'app : copie le **Client ID**, puis **View client secret**
-   et copie le **Client Secret**. Colle-les dans la console et enregistre.
-4. Clique **Connecter le compte Spotify**, accepte les autorisations : tu reviens
-   sur la console avec le compte affiché.
+   et copie le **Client Secret**. Colle-les dans la carte Spotify et enregistre.
+4. **Settings › User Management** : ajoute le nom et l'e-mail du compte Spotify de
+   **chaque personne** qui connectera son compte (toi compris). En Development Mode,
+   Spotify refuse les comptes qui ne sont pas dans cette liste, et la limite est de
+   **5 comptes** par app.
+
+### Dans chaque foyer : connecter son compte
+
+Page **Services** › carte Spotify › **Connecter mon compte Spotify**, accepte les
+autorisations : tu reviens sur la console avec le compte affiché. Chaque foyer
+connecte le sien ; tous les écrans du foyer affichent et pilotent ce compte.
 
 Bon à savoir :
 
-- En Development Mode, une app est limitée à 5 utilisateurs : c'est largement
-  suffisant puisque seul ton compte s'y connecte.
+- Si la connexion échoue avec un compte d'un autre foyer, c'est presque toujours
+  qu'il n'a pas été ajouté dans *User Management* (étape 4).
+- Changer de Client ID (nouvelle app) déconnecte les comptes de tous les foyers :
+  chacun devra cliquer de nouveau sur « Connecter mon compte Spotify ».
 - Les commandes agissent sur l'appareil Spotify actif (téléphone, ordinateur,
-  enceinte connectée). Si rien ne joue, lance d'abord une lecture quelque part.
+  enceinte connectée). Si rien ne joue, lance d'abord une lecture quelque part ;
+  les commandes de lecture demandent un compte Premium.
 
 ## Roblox — joueurs connectés à ton jeu
 
@@ -75,10 +97,14 @@ Apple ne propose pas d'API : on passe par CalDAV avec un **mot de passe pour app
 Les rappels de tes événements (alarme « 15 min avant »…) sont repris sur la
 tablette, et les événements de priorité haute sont marqués « Important ».
 
-## La tablette (ou l'émulateur)
+## Les écrans (tablettes ou émulateur)
 
-Page **Appareil & réveils** → **Associer une tablette** : la console affiche
-l'adresse du serveur et un code à 6 chiffres valable 10 minutes. Sur l'écran,
-l'assistant demande le Wi-Fi (tablette uniquement), l'adresse du serveur, puis le
-code. Le jeton obtenu peut être révoqué à tout moment (« Régénérer le jeton » ou
-« Désappairer »).
+Page **Mes écrans** → **Ajouter un écran** : la console affiche l'adresse du serveur
+et un code à 6 chiffres valable 10 minutes. Sur l'écran, l'assistant demande le
+Wi-Fi (tablette uniquement), l'adresse du serveur, puis le code. Tu peux associer
+autant d'écrans que tu veux à ton foyer : ils partagent les tâches, l'agenda, la
+musique et les services, et chacun garde ses réveils, sa disposition et ses
+réglages d'affichage (page de l'écran, en cliquant dessus).
+
+Depuis la page d'un écran : **Ré-associer** (nouveau code, l'ancien jeton cesse de
+fonctionner, l'écran garde ses réglages) ou **Retirer cet écran**.

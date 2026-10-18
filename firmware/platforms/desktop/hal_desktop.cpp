@@ -28,6 +28,8 @@ void audioCallback(void* userdata, Uint8* stream, int len) {
 
 
 std::string defaultDir() {
+    // SD_SIM_DIR : un dossier de réglages par émulateur, pour simuler plusieurs écrans.
+    if (const char* dir = std::getenv("SD_SIM_DIR"); dir && *dir) return dir;
     const char* home = std::getenv("HOME");
 #ifdef _WIN32
     if (!home) home = std::getenv("USERPROFILE");

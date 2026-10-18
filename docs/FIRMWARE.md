@@ -88,8 +88,8 @@ L'assistant s'affiche à l'écran :
 
 1. **Wi-Fi** : choisis ton réseau et saisis le mot de passe (clavier à l'écran).
 2. **Serveur** : l'adresse de ta console, par exemple `https://dashboard.mon-domaine.fr`.
-3. **Code** : dans la console, Appareil & réveils → **Associer une tablette**,
-   puis saisis le code à 6 chiffres.
+3. **Code** : dans la console, **Mes écrans → Ajouter un écran**, puis saisis le
+   code à 6 chiffres. Chaque tablette associée devient un écran de ton foyer.
 
 Tu peux aussi appuyer sur « Essayer le mode démo » pour voir l'interface sans serveur.
 Pour recommencer l'appairage : Réglages → Connexion → « Associer à nouveau ».

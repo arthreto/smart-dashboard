@@ -79,8 +79,10 @@ powershell -ExecutionPolicy Bypass -File deploy\envoyer-sur-vps.ps1 -Serveur uti
 
 Le script réaffiche le plan et **demande confirmation** (`o` pour continuer). Ensuite
 il compile l'application, crée la configuration (avec une clé de chiffrement
-générée) et te demande de **choisir le mot de passe de la console** — avant la mise
-en ligne, pour que personne ne puisse créer le compte à ta place.
+générée) et te demande de **choisir l'identifiant et le mot de passe du compte
+administrateur** — avant la mise en ligne, pour que personne ne puisse créer le
+compte à ta place. Ce compte gère le serveur (comptes, invitations, clés API) et a
+aussi son propre foyer, avec tes écrans.
 
 > Le VPS doit être sous Debian ou Ubuntu, et ton compte doit pouvoir utiliser `sudo`.
 
@@ -126,21 +128,55 @@ server {
 
 ## 4. Première connexion
 
-Ouvre `https://dashboard.mon-domaine.fr`, connecte-toi avec le mot de passe choisi,
-puis :
+Ouvre `https://dashboard.mon-domaine.fr`, connecte-toi avec ton identifiant et ton
+mot de passe, puis :
 
-- **Appareil & réveils › Sécurité** : active la double authentification (TOTP, avec
-  Google Authenticator, 1Password, l'app Mots de passe d'iPhone…) et choisis le
-  code PIN de l'écran.
-- **Intégrations** : renseigne les clés d'API → [INTEGRATIONS.md](INTEGRATIONS.md).
-- **Appareil & réveils** : réveils, disposition de l'accueil, puis « Associer une
-  tablette » pour obtenir un code d'appairage (valable 10 minutes).
+- **Mon compte** : active la double authentification (TOTP, avec Google
+  Authenticator, 1Password, l'app Mots de passe d'iPhone…).
+- **Administration › Clés API & services** : renseigne l'app Spotify du serveur et
+  choisis les services proposés aux foyers → [INTEGRATIONS.md](INTEGRATIONS.md).
+- **Services** : connecte les comptes de ton foyer (Spotify, iCloud, cinéma…).
+- **Mes écrans › Ajouter un écran** : code d'appairage (valable 10 minutes) pour
+  chaque tablette. Clique ensuite sur un écran pour régler ses réveils, sa
+  disposition, son affichage et son verrouillage (le code PIN est commun à tes écrans).
+
+## 5. Inviter d'autres personnes
+
+Chaque personne a **son propre compte et son propre foyer** : ses écrans, tâches,
+agenda et services sont séparés des tiens (une base de données par foyer), et tu ne
+vois pas ses données.
+
+1. **Administration › Comptes & invitations › Inviter quelqu'un** : une note (pour
+   toi) et une durée de validité, puis **Créer le lien**.
+2. Envoie le lien affiché (il n'est montré qu'une fois et ne sert qu'une fois).
+3. La personne choisit son identifiant, son mot de passe et le nom de son foyer, puis
+   associe ses écrans depuis **Mes écrans**.
+
+Depuis la même page : désactiver ou réactiver un compte, donner le rôle
+d'administrateur, créer un **lien de mot de passe** (si quelqu'un l'a oublié), ou
+supprimer un compte avec son foyer.
+
+> Spotify : en « Development Mode », ajoute l'e-mail Spotify de chaque personne dans
+> ton app Spotify (5 comptes maximum), sinon sa connexion sera refusée — voir
+> [INTEGRATIONS.md](INTEGRATIONS.md).
 
 ## Mettre à jour
 
 Relance simplement la même commande `envoyer-sur-vps.ps1` (ou `install.sh`) : le
 projet est recompilé, le service redémarré, et **les données comme la
 configuration sont conservées** (le site Nginx déjà en place n'est pas réécrit).
+
+**Depuis la version à un seul mot de passe** : la mise à jour convertit les données
+toute seule au premier lancement (une copie de l'ancienne base est gardée dans
+`/var/lib/smart-dashboard/avant-comptes-<date>/`). Ensuite :
+
+- connecte-toi avec l'identifiant **`admin`** et **ton mot de passe habituel** (la
+  double authentification reste active si tu l'avais) ; tu peux changer
+  l'identifiant dans **Mon compte** ;
+- ta tablette déjà associée continue de fonctionner sans rien refaire : elle devient
+  le premier écran de ton foyer, avec ses réveils et ses réglages ;
+- l'app Spotify (Client ID et secret) devient celle du serveur, et ton compte Spotify
+  reste connecté.
 
 ## Commandes utiles sur le VPS
 
@@ -150,20 +186,25 @@ sudo journalctl -u smart-dashboard -f          # journaux en direct
 sudo systemctl restart smart-dashboard         # redémarrer
 sudo nano /opt/smart-dashboard/server/.env     # configuration (puis redémarrer)
 
-# Mot de passe de la console oublié (désactive aussi la double authentification)
-cd /opt/smart-dashboard/server && sudo -u smartdash node dist/cli.js reset-password
+# Comptes (le Node privé, s'il a été installé, est /opt/smart-dashboard/node/bin/node)
+cd /opt/smart-dashboard/server
+sudo -u smartdash node dist/cli.js users                   # liste des comptes
+sudo -u smartdash node dist/cli.js reset-password [login]  # mot de passe oublié (désactive aussi la 2FA)
+sudo -u smartdash node dist/cli.js invite "Maman"          # lien d'invitation, sans passer par la console
 ```
 
 ## Sauvegardes
 
 Deux choses suffisent pour tout restaurer :
 
-- `/var/lib/smart-dashboard/` — la base SQLite (habitudes, historique, réglages, clés chiffrées) ;
+- `/var/lib/smart-dashboard/` — les bases SQLite : `main.db` (comptes, écrans, clés
+  d'application) et `households/<n>.db` (un fichier par foyer : habitudes, historique,
+  réveils, services) ;
 - `/opt/smart-dashboard/server/.env` — surtout la ligne `SECRET_KEY` : **sans elle, les
   clés d'API enregistrées sont illisibles** (une copie est faite dans
   `/var/lib/smart-dashboard/.env.backup` à la première installation).
 
-La console propose aussi un export JSON (Appareil & réveils › Sauvegarde), sans les secrets.
+Chaque foyer peut aussi exporter ses données en JSON (Mon compte › Sauvegarde), sans les secrets.
 
 ## Configuration (`server/.env`)
 
@@ -174,8 +215,8 @@ La console propose aussi un export JSON (Appareil & réveils › Sauvegarde), sa
 | `HOST`, `PORT` | écoute locale derrière Nginx | `127.0.0.1`, `8787` |
 | `TZ` | fuseau des habitudes, réveils, agenda | `Europe/Paris` |
 | `TZ_POSIX` | même fuseau au format POSIX pour la tablette | `CET-1CEST,M3.5.0,M10.5.0/3` |
-| `DATA_DIR` | dossier de la base | `/var/lib/smart-dashboard` |
-| `NODE_ENV` | `production` : cookies réservés au HTTPS, compte de la console créé seulement depuis le serveur | `production` |
+| `DATA_DIR` | dossier des bases (`main.db`, `households/`) et des captures | `/var/lib/smart-dashboard` |
+| `NODE_ENV` | `production` : cookies réservés au HTTPS, compte administrateur créé seulement depuis le serveur | `production` |
 | `TRUST_PROXY` | proxys de confiance pour l'adresse du visiteur (limites de tentatives) | `127.0.0.1,::1` (Nginx local) |
 
 ## En cas de problème

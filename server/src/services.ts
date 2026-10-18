@@ -44,8 +44,9 @@ const INFO: Record<ServiceId, ServiceInfo> = {
     ],
     secretFields: ['clientSecret'],
     help:
-      'En « Development Mode », Spotify n’autorise que les comptes ajoutés à la main (25 au maximum) : ' +
-      'developer.spotify.com › ton app › Settings › User Management › ajoute l’e-mail Spotify de chaque personne.',
+      'En « Development Mode », Spotify n’autorise que les comptes ajoutés à la main, 5 au maximum, et le propriétaire de l’app ' +
+      'doit avoir Spotify Premium : developer.spotify.com › ton app › Settings › User Management › ajoute le nom et l’e-mail ' +
+      'Spotify de chaque personne qui connectera son compte.',
   },
   weather: { name: 'Météo', description: 'Open-Meteo : aucune clé nécessaire. Chaque foyer indique sa ville.', appFields: [], secretFields: [], help: '' },
   roblox: { name: 'Roblox', description: 'API publique : aucune clé nécessaire. Chaque foyer choisit son jeu.', appFields: [], secretFields: [], help: '' },

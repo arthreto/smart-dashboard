@@ -45,8 +45,8 @@ bash firmware/tools/emulateur.sh --demo
 
 | Commande | Effet |
 |---|---|
-| `emulateur.sh --demo` | données d'exemple, sans serveur |
-| `emulateur.sh` | assistant d'appairage : adresse de ton serveur + code affiché par la console (Appareil & réveils › Associer une tablette) |
+| `emulateur.sh --demo` | données d'exemple, sans serveur (pour cette fois seulement : le lancement suivant sans `--demo` revient à l'assistant ou au serveur associé) |
+| `emulateur.sh` | assistant d'installation, comme sur la tablette : adresse de ton serveur + code affiché par la console (Mes écrans › Ajouter un écran) |
 | `emulateur.sh --server https://dashboard.mon-domaine.fr --token sdb_…` | appairage direct avec un jeton existant |
 | `emulateur.sh --reset` | oublie l'appairage (revient à l'assistant) |
 | `emulateur.sh --mute` | sans son |
@@ -64,11 +64,16 @@ Raccourcis clavier dans la fenêtre :
 | **S** | capture d'écran (`capture-N.ppm` dans le dossier courant) |
 | **Échap** | fermer les superpositions (verrouillage, alarme, assistant) |
 
-L'émulateur garde ses réglages dans `~/.smart-dashboard-sim` (côté Linux).
+L'émulateur garde ses réglages dans `~/.smart-dashboard-sim` (côté Linux), ou dans le
+dossier indiqué par la variable `SD_SIM_DIR`.
 
 ## Différences avec la tablette
 
 - Pas de Wi-Fi à configurer : le PC est déjà connecté.
+- Chaque émulateur associé compte comme un écran de ton foyer (pratique pour essayer
+  plusieurs écrans : lance un second émulateur avec son propre dossier de réglages,
+  `SD_SIM_DIR=~/.smart-dashboard-sim-2 bash firmware/tools/emulateur.sh`, puis
+  associe-le avec un nouveau code).
 - La veille profonde est simulée (un message indique l'heure de réveil prévue).
 - L'iPhone est simulé : **Associer un iPhone** affiche un code au bout de 3 s et
   l'association réussit seule 9 s plus tard. Les notifications et les appels sont
