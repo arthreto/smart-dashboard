@@ -29,3 +29,7 @@ firmware/platforms/tab5/dependencies.lock
 Thumbs.db
 .vscode/
 .idea/
+
+# Archives envoyées sur le VPS
+*.tar.gz
+*.tgz
