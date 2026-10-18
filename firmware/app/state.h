@@ -202,6 +202,15 @@ struct State {
 };
 
 bool parseState(const std::string& json, State& out, std::string& error);
+
+/** Fiche d'un film (GET /api/v1/cinema/film/:id). */
+struct FilmDetails {
+    std::string id, title, genre, duration, rating, releaseDate, synopsis, directors, actors, trailerUrl, posterUrl;
+    bool trailerIsPage = false;
+};
+bool parseFilmDetails(const std::string& json, FilmDetails& out);
+/** Événements jour par jour (GET /api/v1/agenda?from=…&to=…). */
+bool parseAgendaRange(const std::string& json, std::vector<DayEvents>& out);
 /** Réponse « rien n'a changé » du serveur ({ unchanged: true, serverTime }). */
 bool isUnchanged(const std::string& json, int64_t& serverTime);
 bool parseTasks(const std::string& json, Tasks& out);

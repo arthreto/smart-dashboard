@@ -455,6 +455,72 @@ void App::setCinemaNotify(const std::string& filmId, bool notify) {
                  });
 }
 
+// ---------------------------------------------------------------- calendrier (navigation)
+
+const DayEvents* App::agendaDay(const std::string& date) const {
+    for (const DayEvents& d : state_.agenda.week)
+        if (d.date == date) return &d;
+    auto it = agendaCache_.find(date);
+    return it == agendaCache_.end() ? nullptr : &it->second;
+}
+
+void App::requestAgenda(const std::string& from, const std::string& to) {
+    if (demo_ || !api::configured() || agendaLoading_ || !state_.agenda.valid) return;
+    // Tout est déjà là (et récent) ? Rien à demander.
+    uint32_t now = hal::get().millis();
+    bool missing = false;
+    for (std::string d = from; d < to; d = util::addDaysIso(d, 1)) {
+        bool inState = std::any_of(state_.agenda.week.begin(), state_.agenda.week.end(), [&](const DayEvents& x) { return x.date == d; });
+        auto at = agendaFetchedAt_.find(d);
+        if (!inState && (at == agendaFetchedAt_.end() || now - at->second > 5 * 60000u)) {
+            missing = true;
+            break;
+        }
+    }
+    if (!missing) return;
+    agendaLoading_ = true;
+    agendaError_.clear();
+    api::request("GET", "/api/v1/agenda?from=" + from + "&to=" + to, "", [this](const hal::HttpResponse& r) {
+        agendaLoading_ = false;
+        std::vector<DayEvents> days;
+        if (r.status == 200 && parseAgendaRange(r.body, days)) {
+            uint32_t at = hal::get().millis();
+            for (DayEvents& d : days) {
+                agendaFetchedAt_[d.date] = at;
+                agendaCache_[d.date] = std::move(d);
+            }
+            if (agendaCache_.size() > 400) {  // garde-fou mémoire : on repart de zéro
+                agendaCache_.clear();
+                agendaFetchedAt_.clear();
+            }
+        } else {
+            agendaError_ = r.status ? parseErrorMessage(r.body) : (r.error.empty() ? "Serveur injoignable" : r.error);
+        }
+        if (screen_ == Screen::Calendar) invalidate();
+    });
+}
+
+// ---------------------------------------------------------------- cinéma (fiches)
+
+const FilmDetails* App::film(const std::string& id) const {
+    auto it = films_.find(id);
+    return it == films_.end() ? nullptr : &it->second;
+}
+
+void App::requestFilm(const std::string& id) {
+    if (demo_ || !api::configured() || id.empty() || films_.count(id) || filmPending_.count(id)) return;
+    filmPending_.insert(id);
+    api::request("GET", "/api/v1/cinema/film/" + id, "", [this, id](const hal::HttpResponse& r) {
+        filmPending_.erase(id);
+        FilmDetails f;
+        if (r.status == 200 && parseFilmDetails(r.body, f)) {
+            if (films_.size() > 40) films_.clear();
+            films_[id] = std::move(f);
+            if (screen_ == Screen::Cinema) invalidate();
+        }
+    });
+}
+
 void App::updateSettings(const std::string& jsonPatch) {
     applyBrightness();
     invalidate();

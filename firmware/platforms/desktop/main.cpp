@@ -167,6 +167,41 @@ int main(int argc, char** argv) {
         }
         App::get().state().settings.theme = "dark";
         App::get().updateSettings("{}");
+        if (live) {
+            // Calendrier (mois, autre mois, semaine suivante) et cinéma (fiche, bientôt, bande-annonce).
+            App& a = App::get();
+            auto shot = [&](const char* name, int wait = 2500) {
+                a.invalidate();
+                spin(wait);
+                writeFrame(disp, shotsDir + "/" + name + ".ppm");
+            };
+            a.navigate(Screen::Calendar);
+            a.ui.calendarView = 2;
+            shot("18-calendrier-mois");
+            a.ui.calAnchor = "2026-12-01";
+            a.ui.calSelected = "2026-12-24";
+            shot("19-calendrier-decembre");
+            a.ui.calendarView = 1;
+            a.ui.calAnchor.clear();
+            a.ui.calSelected.clear();
+            shot("19b-calendrier-semaine");
+            a.ui.calendarView = 0;
+            a.ui.calScroll = -1;
+            shot("19c-calendrier-jour");
+            a.ui.calendarView = 3;
+            a.ui.calScroll = -1;
+            a.navigate(Screen::Cinema);
+            a.ui.cinemaFilm = 4;
+            shot("20-cinema-fiche");
+            openTrailer("Dune : Troisième Partie", "https://www.youtube.com/watch?v=Way9Dexny3w", false);
+            spin(400);
+            writeFrame(disp, shotsDir + "/21-bande-annonce.ppm");
+            closeTrailer();
+            a.ui.cinemaTab = 1;
+            a.ui.cinemaFilm = 0;
+            shot("22-cinema-bientot");
+            a.ui.cinemaTab = 0;
+        }
         // iPhone : bandeau de notification, appel entrant, association
         App::get().navigate(Screen::Home);
         spin(300);

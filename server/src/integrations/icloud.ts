@@ -28,6 +28,9 @@ export interface AgendaData {
   events: AgendaEvent[];
   calendars: { id: string; name: string; color: string }[];
   updatedAt: string;
+  /** Période couverte (jours AAAA-MM-JJ, fin exclue). */
+  rangeFrom?: string;
+  rangeTo?: string;
 }
 
 const PALETTE = ['#30D158', '#0A84FF', '#FF9F0A', '#FF453A', '#BF5AF2', '#64D2FF', '#FF375F', '#5E5CE6'];
@@ -198,7 +201,7 @@ export function eventsFromIcs(out: AgendaEvent[], data: string, from: Date, to: 
   }
 }
 
-async function fetchAgenda(ctx: IntegrationContext): Promise<AgendaData> {
+async function fetchAgenda(ctx: IntegrationContext, range?: { from: string; to: string }): Promise<AgendaData> {
   const c = await client(ctx);
   const all = await c.fetchCalendars();
   const wanted: string[] = Array.isArray(ctx.config.calendars) ? ctx.config.calendars : [];
@@ -206,11 +209,14 @@ async function fetchAgenda(ctx: IntegrationContext): Promise<AgendaData> {
     .map((cal, i) => ({ cal, id: cal.url, name: calName(cal), color: normColor(cal.calendarColor, i) }))
     .filter((x) => (!x.cal.components || x.cal.components.includes('VEVENT')) && (wanted.length === 0 || wanted.includes(x.id)));
 
+  // Par défaut : du début du mois précédent à trois mois devant (ce que l'écran affiche
+  // le plus souvent) ; au-delà, l'écran demande la période voulue (agendaRange).
   const today = dateKey();
-  const monthStart = today.slice(0, 8) + '01';
-  const fromKey = monthStart < mondayOf(today) ? monthStart : mondayOf(today);
+  const prevMonth = addDays(today.slice(0, 8) + '01', -1).slice(0, 8) + '01';
+  const fromKey = range?.from ?? prevMonth;
+  const toKey = range?.to ?? addDays(today, 92);
   const from = new Date(`${fromKey}T00:00:00`);
-  const to = new Date(`${addDays(today, 45)}T00:00:00`);
+  const to = new Date(`${toKey}T00:00:00`);
 
   const events: AgendaEvent[] = [];
   for (const x of cals) {
@@ -223,7 +229,53 @@ async function fetchAgenda(ctx: IntegrationContext): Promise<AgendaData> {
     }
   }
   events.sort((a, b) => a.startTs - b.startTs);
-  return { events, calendars: cals.map(({ id, name, color }) => ({ id, name, color })), updatedAt: new Date().toISOString() };
+  return {
+    events,
+    calendars: cals.map(({ id, name, color }) => ({ id, name, color })),
+    updatedAt: new Date().toISOString(),
+    rangeFrom: fromKey,
+    rangeTo: toKey,
+  };
+}
+
+// Périodes demandées par les écrans hors de la période en cache (navigation dans le temps).
+const rangeCache = new Map<string, { at: number; data: AgendaData }>();
+const RANGE_TTL = 10 * 60_000;
+const MAX_RANGE_DAYS = 62;
+
+/** Événements jour par jour entre `from` et `to` (exclu), depuis le cache ou iCloud. */
+export async function agendaRange(ctx: IntegrationContext, from: string, to: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || to <= from) throw new ConfigError('Période invalide.');
+  const days: string[] = [];
+  for (let d = from; d < to && days.length <= MAX_RANGE_DAYS; d = addDays(d, 1)) days.push(d);
+  if (days.length > MAX_RANGE_DAYS) throw new ConfigError(`Période trop longue (${MAX_RANGE_DAYS} jours au plus).`);
+
+  let data = getCache<AgendaData>(ctx.db, 'icloud')?.value ?? null;
+  const covered = data?.rangeFrom && data.rangeTo && from >= data.rangeFrom && to <= data.rangeTo;
+  if (!covered) {
+    const key = `${ctx.householdId}:${from}:${to}`;
+    const hit = rangeCache.get(key);
+    if (hit && Date.now() - hit.at < RANGE_TTL) data = hit.data;
+    else {
+      data = await fetchAgenda(ctx, { from, to });
+      if (rangeCache.size > 200) rangeCache.clear();
+      rangeCache.set(key, { at: Date.now(), data });
+    }
+  }
+  const events = data?.events ?? [];
+  return {
+    from,
+    to,
+    days: days.map((date) => ({
+      date,
+      events: events
+        .map((e) => {
+          const part = onDay(e, date);
+          return part ? { ...part, id: e.id, location: e.location, calendar: e.calendar, important: e.important } : null;
+        })
+        .filter((x) => x !== null),
+    })),
+  };
 }
 
 export const icloud: IntegrationDef = {

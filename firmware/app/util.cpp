@@ -155,6 +155,34 @@ std::string shortFrenchDate(const std::string& iso) {
     return wd + ". " + std::to_string(d) + " " + monthName(mo - 1);
 }
 
+bool parseIso(const std::string& iso, struct tm& out) {
+    int y = 0, mo = 0, d = 0;
+    if (sscanf(iso.c_str(), "%d-%d-%d", &y, &mo, &d) != 3) return false;
+    out = {};
+    out.tm_year = y - 1900;
+    out.tm_mon = mo - 1;
+    out.tm_mday = d;
+    out.tm_hour = 12;
+    out.tm_isdst = -1;
+    mktime(&out);
+    return true;
+}
+
+std::string isoDate(const struct tm& t) {
+    char b[16];
+    snprintf(b, sizeof b, "%04d-%02d-%02d", (t.tm_year + 1900) % 10000, (t.tm_mon + 1) % 100, t.tm_mday % 100);
+    return b;
+}
+
+std::string addDaysIso(const std::string& iso, int n) {
+    struct tm t;
+    if (!parseIso(iso, t)) return iso;
+    t.tm_mday += n;
+    t.tm_isdst = -1;
+    mktime(&t);
+    return isoDate(t);
+}
+
 std::string relativeDay(const std::string& iso) {
     int y = 0, mo = 0, d = 0;
     if (sscanf(iso.c_str(), "%d-%d-%d", &y, &mo, &d) != 3) return "";

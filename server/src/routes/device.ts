@@ -16,9 +16,10 @@ import {
 } from '../device.js';
 import { HabitBook, ValidationError, setHabitDone } from '../habits.js';
 import { getAlarm, updateAlarm } from '../alarms.js';
-import { getDef, isEnabled, makeContext } from '../integrations/index.js';
+import { getDef, isAvailable, isEnabled, makeContext } from '../integrations/index.js';
 import { control } from '../integrations/spotify.js';
-import { setCinemaAlert } from '../integrations/pathe.js';
+import { filmDetails, setCinemaAlert } from '../integrations/pathe.js';
+import { agendaRange } from '../integrations/icloud.js';
 import { isAllowedImage, processImage, rgb565ToJpeg } from '../images.js';
 import { logEvent } from '../events.js';
 import { HttpError } from '../http.js';
@@ -132,6 +133,24 @@ export function deviceRoutes(app: FastifyInstance, mainDb: DB): void {
     if (missing) throw new HttpError(409, '', missing);
     const { action } = req.params as { action: string };
     return deviceSafe(await control(ctx, action, ((req.body ?? {}) as Body).value));
+  });
+
+  // Calendrier : n'importe quelle période (navigation jour / semaine / mois / année).
+  app.get('/api/v1/agenda', dev, async (req) => {
+    const db = req.hdb!;
+    if (!isAvailable('icloud') || !isEnabled(db, 'icloud')) throw new HttpError(409, '', 'Calendrier iCloud non activé dans la console.');
+    const ctx = makeContext(db, 'icloud');
+    const missing = getDef('icloud')!.missing(ctx);
+    if (missing) throw new HttpError(409, '', missing);
+    const { from, to } = req.query as { from?: string; to?: string };
+    return deviceSafe(await agendaRange(ctx, String(from ?? ''), String(to ?? '')));
+  });
+
+  // Fiche d'un film : résumé, réalisation, distribution, bande-annonce.
+  app.get('/api/v1/cinema/film/:id', dev, async (req, reply) => {
+    const details = filmDetails(req.hdb!, (req.params as { id: string }).id);
+    if (!details) return reply.code(404).send({ error: 'not_found', message: 'Film introuvable.' });
+    return deviceSafe(details);
   });
 
   app.post('/api/v1/cinema/notify/:id', dev, async (req) => {

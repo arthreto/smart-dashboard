@@ -28,6 +28,7 @@
 
 #define LV_USE_TJPGD 1
 #define LV_USE_SNAPSHOT 1
+#define LV_USE_QRCODE 1  /* bande-annonce : QR code à scanner avec le téléphone */
 
 /* Pilote SDL (fenêtre + souris + clavier) */
 #define LV_USE_SDL 1

@@ -147,6 +147,44 @@ void parseAlarmObj(const cJSON* a, Alarm& al) {
 
 }  // namespace
 
+bool parseFilmDetails(const std::string& json, FilmDetails& out) {
+    cJSON* root = cJSON_Parse(json.c_str());
+    if (!root) return false;
+    out.id = str(root, "id");
+    out.title = str(root, "title");
+    out.genre = str(root, "genre");
+    out.duration = str(root, "duration");
+    out.rating = str(root, "rating");
+    out.releaseDate = str(root, "releaseDate");
+    out.synopsis = str(root, "synopsis");
+    out.directors = str(root, "directors");
+    out.actors = str(root, "actors");
+    out.trailerUrl = str(root, "trailerUrl");
+    out.trailerIsPage = flag(root, "trailerIsPage");
+    out.posterUrl = str(root, "posterUrl");
+    cJSON_Delete(root);
+    return !out.id.empty();
+}
+
+bool parseAgendaRange(const std::string& json, std::vector<DayEvents>& out) {
+    cJSON* root = cJSON_Parse(json.c_str());
+    if (!root) return false;
+    const cJSON* it;
+    cJSON_ArrayForEach(it, arr(root, "days")) {
+        DayEvents d;
+        d.date = str(it, "date");
+        const cJSON* e;
+        cJSON_ArrayForEach(e, arr(it, "events")) {
+            Event ev = parseEvent(e);
+            ev.date = d.date;
+            d.events.push_back(ev);
+        }
+        out.push_back(std::move(d));
+    }
+    cJSON_Delete(root);
+    return true;
+}
+
 bool isUnchanged(const std::string& json, int64_t& serverTime) {
     if (json.size() > 512 || json.find("\"unchanged\"") == std::string::npos) return false;
     cJSON* root = cJSON_Parse(json.c_str());

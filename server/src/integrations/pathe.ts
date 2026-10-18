@@ -44,6 +44,24 @@ interface ShowDetails {
   runtime?: number;
   contentRating?: unknown;
   certification?: string;
+  synopsis?: unknown;
+  shortSynopsis?: unknown;
+  directors?: unknown;
+  actors?: unknown;
+  trailers?: unknown;
+  originalTitle?: string;
+  nationality?: unknown;
+}
+
+/** Fiche détaillée d'un film (envoyée à l'écran à la demande). */
+export interface FilmInfo {
+  synopsis: string;
+  directors: string;
+  actors: string;
+  trailerUrl: string;
+  pageUrl: string;
+  releaseDate: string;
+  posterLargeUrl: string;
 }
 
 export interface CinemaFilm {
@@ -56,6 +74,7 @@ export interface CinemaFilm {
   releaseDate: string;
   posterUrl: string;
   showsByDay: Record<string, { time: string; tag: string }[]>;
+  info?: FilmInfo;
 }
 
 export interface CinemaData {
@@ -63,7 +82,7 @@ export interface CinemaData {
   cinemaName: string;
   days: { date: string; label: string }[];
   films: CinemaFilm[];
-  upcoming: { id: string; title: string; date: string; genre: string; posterUrl: string }[];
+  upcoming: { id: string; title: string; date: string; genre: string; posterUrl: string; info?: FilmInfo }[];
   updatedAt: string;
 }
 
@@ -87,6 +106,75 @@ function ratingOf(d: ShowDetails): string {
 function posterOf(d: ShowDetails, w: number, h: number): string {
   const src = d.posterPath?.md || d.posterPath?.lg || d.posterPath?.sm;
   return src ? imageUrlFor(src, w, h) : '';
+}
+
+function textOf(v: unknown): string {
+  if (typeof v !== 'string') return '';
+  return v
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#0?39;|&rsquo;/g, '’')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** « Réalisateur », « Acteurs » : chaîne, liste de chaînes ou liste d'objets selon les fiches. */
+function namesOf(v: unknown, max = 4): string {
+  const list = Array.isArray(v) ? v : typeof v === 'string' ? v.split(/,\s*/) : [];
+  const names = list
+    .map((x) => {
+      if (typeof x === 'string') return x.trim();
+      if (x && typeof x === 'object') {
+        const o = x as Record<string, unknown>;
+        const n = o.name ?? o.fullName ?? o.fullname ?? [o.firstName ?? o.firstname, o.lastName ?? o.lastname].filter(Boolean).join(' ');
+        return typeof n === 'string' ? n.trim() : '';
+      }
+      return '';
+    })
+    .filter(Boolean);
+  return names.slice(0, max).join(', ');
+}
+
+/** Lien de la bande-annonce (YouTube ou vidéo Pathé), sinon chaîne vide. */
+function trailerOf(v: unknown): string {
+  const items = Array.isArray(v) ? v : v ? [v] : [];
+  for (const it of items) {
+    if (typeof it === 'string') {
+      if (/^https?:\/\//.test(it)) return it;
+      if (/^[\w-]{11}$/.test(it)) return `https://www.youtube.com/watch?v=${it}`;
+      continue;
+    }
+    if (!it || typeof it !== 'object') continue;
+    const o = it as Record<string, unknown>;
+    for (const k of ['url', 'link', 'src', 'externalUrl', 'videoUrl', 'href']) {
+      const u = o[k];
+      if (typeof u === 'string' && /^https?:\/\//.test(u)) return u;
+    }
+    const id = o.externalId ?? o.youtubeId ?? o.videoId ?? o.key ?? o.id;
+    const provider = String(o.source ?? o.provider ?? o.platform ?? o.type ?? 'youtube').toLowerCase();
+    if (typeof id === 'string' && /^[\w-]{11}$/.test(id) && provider.includes('youtube')) return `https://www.youtube.com/watch?v=${id}`;
+    if (typeof id === 'string' && /^[\w-]{11}$/.test(id) && !provider.includes('vimeo')) return `https://www.youtube.com/watch?v=${id}`;
+    if (typeof id === 'string' && /^\d+$/.test(id) && provider.includes('vimeo')) return `https://vimeo.com/${id}`;
+  }
+  return '';
+}
+
+function infoOf(d: ShowDetails): FilmInfo {
+  return {
+    synopsis: (textOf(d.synopsis) || textOf(d.shortSynopsis)).slice(0, 1200),
+    directors: namesOf(d.directors, 3),
+    actors: namesOf(d.actors, 5),
+    trailerUrl: trailerOf(d.trailers),
+    pageUrl: `https://www.pathe.fr/films/${encodeURIComponent(d.slug)}`,
+    releaseDate: d.releaseAt?.FR_FR ?? '',
+    posterLargeUrl: posterOf(d, 240, 350),
+  };
 }
 
 function dayLabel(date: string, today: string): string {
@@ -113,16 +201,24 @@ export async function fetchCinema(cinemaId: string, cinemaName: string, dayCount
   const dates = Array.from({ length: dayCount }, (_, i) => addDays(today, i));
   const catalog = await pget<{ shows: CatalogShow[] }>('shows', { date: today, language: 'fr' });
   const shows = Array.isArray(catalog?.shows) ? catalog.shows : [];
-  const candidates = shows.filter((s) => (s.next24ShowtimesCount ?? 0) > 0).slice(0, 160);
+  const candidates = shows.filter((s) => (s.next24ShowtimesCount ?? 0) > 0).slice(0, 300);
 
-  // 1) Quels films passent dans ce cinéma aujourd'hui ?
+  // 1) Quels films passent dans ce cinéma aujourd'hui ou demain ?
   const todaySessions = await mapLimit(candidates, CONCURRENCY, (s) => sessionsFor(s.slug, cinemaId, today));
-  const playing = candidates.map((s, i) => ({ slug: s.slug, today: todaySessions[i] })).filter((x) => x.today.length > 0);
+  const tomorrow = dates[1];
+  const tomorrowSessions = tomorrow
+    ? await mapLimit(candidates, CONCURRENCY, (s, i): Promise<{ time: string; tag: string }[]> =>
+        todaySessions[i].length ? Promise.resolve([]) : sessionsFor(s.slug, cinemaId, tomorrow),
+      )
+    : candidates.map((): { time: string; tag: string }[] => []);
+  const playing = candidates
+    .map((s, i) => ({ slug: s.slug, today: todaySessions[i], tomorrow: tomorrowSessions[i] }))
+    .filter((x) => x.today.length > 0 || x.tomorrow.length > 0);
 
   // 2) Séances des jours suivants pour ces films, puis leurs fiches.
   const films = await mapLimit(playing, CONCURRENCY, async (p) => {
     const showsByDay: CinemaFilm['showsByDay'] = { [today]: p.today };
-    for (const d of dates.slice(1)) showsByDay[d] = await sessionsFor(p.slug, cinemaId, d);
+    for (const d of dates.slice(1)) showsByDay[d] = d === tomorrow && p.tomorrow.length ? p.tomorrow : await sessionsFor(p.slug, cinemaId, d);
     let details: ShowDetails | null = null;
     try {
       details = await pget<ShowDetails>(`show/${p.slug}`, { language: 'fr' });
@@ -142,6 +238,7 @@ export async function fetchCinema(cinemaId: string, cinemaName: string, dayCount
       releaseDate: release,
       posterUrl: posterOf(details, 176, 256),
       showsByDay,
+      info: infoOf(details),
     } satisfies CinemaFilm;
   });
 
@@ -157,14 +254,17 @@ export async function fetchCinema(cinemaId: string, cinemaName: string, dayCount
   const upcoming = upcomingDetails
     .filter((d): d is ShowDetails => !!d?.title && !!d.releaseAt?.FR_FR && d.releaseAt.FR_FR > today)
     .sort((a, b) => a.releaseAt!.FR_FR.localeCompare(b.releaseAt!.FR_FR))
-    .slice(0, 8)
-    .map((d) => ({ id: d.slug, title: d.title, date: d.releaseAt!.FR_FR, genre: genreOf(d), posterUrl: posterOf(d, 54, 80) }));
+    .slice(0, 12)
+    .map((d) => ({ id: d.slug, title: d.title, date: d.releaseAt!.FR_FR, genre: genreOf(d), posterUrl: posterOf(d, 54, 80), info: infoOf(d) }));
 
   return {
     cinemaId,
     cinemaName,
     days: dates.map((d) => ({ date: d, label: dayLabel(d, today) })),
-    films: films.filter((f): f is CinemaFilm => !!f).sort((a, b) => Number(b.isNew) - Number(a.isNew)),
+    // Nouveautés d'abord, puis les films les plus programmés.
+    films: films
+      .filter((f): f is NonNullable<typeof f> => !!f)
+      .sort((a, b) => Number(b.isNew) - Number(a.isNew) || (b.showsByDay[today]?.length ?? 0) - (a.showsByDay[today]?.length ?? 0)),
     upcoming,
     updatedAt: new Date().toISOString(),
   };
@@ -283,6 +383,32 @@ export function cinemaForDevice(db: DB) {
       showsByDay: days.map((d) => (d.date === today ? (f.showsByDay[d.date] ?? []).filter((s) => s.time >= nowHm) : f.showsByDay[d.date] ?? [])),
     })),
     upcoming: data.upcoming.filter((u) => u.date > today).map((u) => ({ ...u, notify: notify.has(u.id) })),
+  };
+}
+
+/** Fiche d'un film à l'affiche ou à venir (cache du foyer). */
+export function filmDetails(db: DB, id: string) {
+  const data = getCache<CinemaData>(db, 'pathe')?.value;
+  if (!data) return null;
+  const film = data.films.find((f) => f.id === id);
+  const up = data.upcoming.find((u) => u.id === id);
+  const src = film ?? up;
+  if (!src) return null;
+  const info: FilmInfo = src.info ?? { synopsis: '', directors: '', actors: '', trailerUrl: '', pageUrl: `https://www.pathe.fr/films/${id}`, releaseDate: '', posterLargeUrl: '' };
+  return {
+    id,
+    title: src.title,
+    genre: src.genre,
+    duration: film?.duration ?? '',
+    rating: film?.rating ?? '',
+    releaseDate: info.releaseDate || (up?.date ?? ''),
+    synopsis: info.synopsis,
+    directors: info.directors,
+    actors: info.actors,
+    // Sans lien direct : la page du film sur pathe.fr, qui contient la bande-annonce.
+    trailerUrl: info.trailerUrl || info.pageUrl,
+    trailerIsPage: !info.trailerUrl,
+    posterUrl: info.posterLargeUrl || src.posterUrl,
   };
 }
 

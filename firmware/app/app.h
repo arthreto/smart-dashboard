@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <functional>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -37,6 +39,18 @@ public:
     void setAlarmEnabled(int id, bool enabled);
     void music(const std::string& action, int value = -1);
     void setCinemaNotify(const std::string& filmId, bool notify);
+
+    // Calendrier : jours au-delà de ceux de l'état (navigation dans le temps).
+    /** Événements d'un jour s'ils sont connus (état ou période déjà demandée), sinon nullptr. */
+    const DayEvents* agendaDay(const std::string& date) const;
+    /** Demande au serveur les jours [from, to) qui manquent ; redessine à la réception. */
+    void requestAgenda(const std::string& from, const std::string& to);
+    bool agendaLoading() const { return agendaLoading_; }
+    const std::string& agendaError() const { return agendaError_; }
+
+    // Cinéma : fiche détaillée d'un film, chargée à la demande.
+    const FilmDetails* film(const std::string& id) const;
+    void requestFilm(const std::string& id);
     void updateSettings(const std::string& jsonPatch);
     void syncNow();
 
@@ -68,7 +82,12 @@ public:
     struct UiState {
         int cinemaFilm = 0;
         int cinemaDay = 0;
-        int calendarView = 1;   // 0 jour, 1 semaine, 2 mois
+        int calendarView = 3;   // 0 jour, 3 trois jours, 1 semaine, 2 mois
+        int calScroll = -1;     // défilement de la grille horaire (-1 : position automatique)
+        std::string calAnchor;    // premier jour affiché (semaine) ou jour du mois affiché ; vide = aujourd'hui
+        std::string calSelected;  // jour détaillé à droite ; vide = aujourd'hui
+        int cinemaTab = 0;        // 0 à l'affiche, 1 prochaines sorties
+        int cinemaScroll = 0;     // défilement de la grille d'affiches (gardé entre deux redessins)
         int statsRange = 1;     // 0 = 7 j, 1 = 14 j, 2 = 30 j
         int tasksTab = 0;
         int settingsSection = 0;
@@ -137,6 +156,12 @@ private:
     std::vector<std::pair<lv_obj_t*, ClockFormat>> clocks_;
     std::vector<std::function<void()>> secondHooks_;
     std::vector<int> processedCommands_;
+    std::map<std::string, DayEvents> agendaCache_;
+    std::map<std::string, uint32_t> agendaFetchedAt_;
+    bool agendaLoading_ = false;
+    std::string agendaError_;
+    std::map<std::string, FilmDetails> films_;
+    std::set<std::string> filmPending_;
     bool preLight_ = false;
     bool deepSlept_ = false;
     uint32_t lastSecondMs_ = 0;
@@ -183,6 +208,9 @@ void buildCalendar(lv_obj_t* parent);
 void buildAlarm(lv_obj_t* parent);
 void buildMusic(lv_obj_t* parent);
 void buildCinema(lv_obj_t* parent);
+/** Bande-annonce d'un film : QR code à scanner (aussi utilisé par les captures de l'émulateur). */
+void openTrailer(const std::string& title, const std::string& url, bool isPage);
+void closeTrailer();
 void buildPhone(lv_obj_t* parent);
 void buildStats(lv_obj_t* parent);
 void buildSettings(lv_obj_t* parent);

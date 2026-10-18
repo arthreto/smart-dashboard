@@ -50,13 +50,13 @@ export async function fetchJson<T>(url: string, opts: FetchOptions = {}): Promis
 }
 
 /** Exécute `fn` sur chaque élément avec au plus `concurrency` appels simultanés. */
-export async function mapLimit<T, R>(items: T[], concurrency: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+export async function mapLimit<T, R>(items: T[], concurrency: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
   async function worker() {
     while (next < items.length) {
       const i = next++;
-      out[i] = await fn(items[i]);
+      out[i] = await fn(items[i], i);
     }
   }
   await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));

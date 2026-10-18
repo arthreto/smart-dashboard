@@ -32,5 +32,11 @@ std::string mmss(int ms);
 std::string shortFrenchDate(const std::string& isoDate);
 /** « Aujourd’hui », « Demain » ou « Lun. 20 » pour une date AAAA-MM-JJ. */
 std::string relativeDay(const std::string& isoDate);
+/** Date AAAA-MM-JJ décalée de n jours (n négatif possible). */
+std::string addDaysIso(const std::string& isoDate, int n);
+/** Date AAAA-MM-JJ d'un struct tm. */
+std::string isoDate(const struct tm& t);
+/** struct tm (à midi) d'une date AAAA-MM-JJ ; false si invalide. */
+bool parseIso(const std::string& isoDate, struct tm& out);
 
 }  // namespace util

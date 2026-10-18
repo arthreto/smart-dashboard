@@ -196,6 +196,8 @@ Objet **Integration** :
 | PATCH | `/api/v1/alarms/:id` | `{ enabled }` (réveil de cet écran uniquement) | `Alarm` |
 | PUT | `/api/v1/settings` | réglages d'affichage modifiés sur l'écran (mêmes champs que `PUT /api/devices/:id/settings`, partiels) | réglages complets de cet écran |
 | POST | `/api/v1/music/:action` | action ∈ `play, pause, next, previous, volume, like` ; `{ value? }` | `music` |
+| GET | `/api/v1/agenda?from=AAAA-MM-JJ&to=AAAA-MM-JJ` | — | `{ from, to, days: [{ date, events: [Event] }] }` (62 jours au plus, `to` exclu ; hors de la période en cache, iCloud est interrogé et le résultat gardé 10 min) |
+| GET | `/api/v1/cinema/film/:id` | — | `{ id, title, genre, duration, rating, releaseDate, synopsis, directors, actors, trailerUrl, trailerIsPage, posterUrl }` (`trailerIsPage` : pas de lien direct, `trailerUrl` est la fiche pathe.fr) |
 | POST | `/api/v1/cinema/notify/:filmId` | `{ notify }` | `{ ok: true }` |
 | GET | `/api/v1/image?src=<url>&w=&h=` | — | `image/jpeg` baseline redimensionnée (hôtes autorisés uniquement) |
 | POST | `/api/v1/screenshot` | corps binaire RGB565 little-endian, en-têtes `X-Width`, `X-Height` | `{ ok: true }` |

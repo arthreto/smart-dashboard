@@ -532,6 +532,33 @@ test('agenda iCloud : répétitions à la bonne heure, journées entières sur p
   assert.equal(ag.today[0].date, today);
 });
 
+test('agenda : période demandée par l’écran (navigation)', async () => {
+  const { agendaRange } = await import('../src/integrations/icloud.js');
+  const { setCache } = await import('../src/db.js');
+  const hdb = openDb(':memory:');
+  const ev = { id: 'x', date: '2027-01-05', start: '10:00', end: '11:00', startTs: new Date('2027-01-05T10:00:00').getTime(), endTs: new Date('2027-01-05T11:00:00').getTime(), endDate: '2027-01-05', title: 'Rendez-vous', location: 'Cabinet', calendar: 'Perso', color: '#FF9F0A', allDay: false, important: false, reminderMinutes: null };
+  setCache(hdb, 'icloud', { events: [ev], calendars: [], updatedAt: '', rangeFrom: '2026-12-01', rangeTo: '2027-03-01' });
+  const ctx = { db: hdb, householdId: 0, config: {}, secrets: {}, app: {} } as never;
+  const r = await agendaRange(ctx, '2027-01-04', '2027-01-07');
+  assert.deepEqual(r.days.map((d) => d.date), ['2027-01-04', '2027-01-05', '2027-01-06']);
+  assert.equal(r.days[1].events[0].title, 'Rendez-vous');
+  assert.equal(r.days[1].events[0].location, 'Cabinet');
+  await assert.rejects(agendaRange(ctx, '2027-01-01', '2027-06-01'), /trop longue/);
+});
+
+test('cinéma : fiche du film et lien de bande-annonce', async () => {
+  const { filmDetails } = await import('../src/integrations/pathe.js');
+  const { setCache } = await import('../src/db.js');
+  const hdb = openDb(':memory:');
+  const info = { synopsis: 'Un résumé.', directors: 'Une Réalisatrice', actors: 'A, B', trailerUrl: '', pageUrl: 'https://www.pathe.fr/films/film-a', releaseDate: '2026-10-01', posterLargeUrl: '' };
+  setCache(hdb, 'pathe', { cinemaId: 'c', cinemaName: 'Pathé', days: [], films: [{ id: 'film-a', title: 'Film A', genre: 'Drame', duration: '2 h', rating: '', isNew: false, releaseDate: '', posterUrl: '', showsByDay: {}, info }], upcoming: [], updatedAt: '' });
+  const d = filmDetails(hdb, 'film-a')!;
+  assert.equal(d.synopsis, 'Un résumé.');
+  assert.equal(d.trailerUrl, 'https://www.pathe.fr/films/film-a');
+  assert.equal(d.trailerIsPage, true);
+  assert.equal(filmDetails(hdb, 'inconnu'), null);
+});
+
 test('séries avec jokers', async () => {
   // Base isolée : 1 habitude quotidienne créée il y a 20 jours.
   const d2 = openDb(':memory:');
