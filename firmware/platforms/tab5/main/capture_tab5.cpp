@@ -119,57 +119,11 @@ void Tab5Capture::reserveInternal() {
     if (!reserve_) ESP_LOGW(TAG, "réserve de RAM interne impossible (%u o)", static_cast<unsigned>(RESERVE_BYTES));
 }
 
-bool Tab5Capture::openPipeline(std::string* error) {
-    // --- Caméra : format du capteur, sortie YUV420 par l'ISP ---
-    camFd_ = open(ESP_VIDEO_MIPI_CSI_DEVICE_NAME, O_RDONLY);
-    if (camFd_ < 0) {
-        *error = errMsg("Caméra absente ou non branchée");
-        return false;
-    }
-    struct v4l2_format fmt = {};
-    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if (ioctl(camFd_, VIDIOC_G_FMT, &fmt) != 0) {
-        *error = errMsg("Caméra : format inconnu");
-        return false;
-    }
-    width_ = static_cast<int>(fmt.fmt.pix.width);
-    height_ = static_cast<int>(fmt.fmt.pix.height);
-    ESP_LOGI(TAG, "capteur %dx%d", width_, height_);
-    struct v4l2_format want = {};
-    want.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    want.fmt.pix.width = width_;
-    want.fmt.pix.height = height_;
-    want.fmt.pix.pixelformat = V4L2_PIX_FMT_YUV420;
-    if (ioctl(camFd_, VIDIOC_S_FMT, &want) != 0) {
-        *error = errMsg("Caméra : YUV420 refusé");
-        return false;
-    }
-    struct v4l2_requestbuffers req = {};
-    req.count = CAM_BUFFERS;
-    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    req.memory = V4L2_MEMORY_MMAP;
-    if (ioctl(camFd_, VIDIOC_REQBUFS, &req) != 0) {
-        *error = errMsg("Caméra : mémoire insuffisante");
-        return false;
-    }
-    for (int i = 0; i < CAM_BUFFERS; i++) {
-        struct v4l2_buffer buf = {};
-        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        buf.memory = V4L2_MEMORY_MMAP;
-        buf.index = i;
-        if (ioctl(camFd_, VIDIOC_QUERYBUF, &buf) != 0) {
-            *error = "Caméra : tampon refusé";
-            return false;
-        }
-        camBuf_[i] = static_cast<uint8_t*>(mmap(nullptr, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, camFd_, buf.m.offset));
-        camBufLen_[i] = buf.length;
-        if (!camBuf_[i] || ioctl(camFd_, VIDIOC_QBUF, &buf) != 0) {
-            *error = "Caméra : tampon refusé";
-            return false;
-        }
-    }
-
-    // --- Encodeur H.264 matériel (mémoire à mémoire) ---
+// L'encodeur est ouvert une seule fois et gardé allumé pour toute la session : sa trame de
+// référence (~92 Ko de RAM interne) n'est allouée qu'une fois, depuis le bloc réservé, et n'est
+// jamais rendue au tas (sinon la RAM interne se morcelle et l'enregistrement suivant échoue).
+bool Tab5Capture::openEncoder(std::string* error) {
+    if (encoderReady_) return true;
     encFd_ = open(ESP_VIDEO_H264_DEVICE_NAME, O_RDONLY);
     if (encFd_ < 0) {
         *error = errMsg("Encodeur H.264 indisponible");
@@ -218,9 +172,7 @@ bool Tab5Capture::openPipeline(std::string* error) {
         return false;
     }
 
-    // L'encodeur H.264 réclame ~92 Ko de RAM interne d'un seul tenant (trame de référence).
-    // La RAM interne totale suffit, mais elle est morcelée : on rend ici le bloc contigu
-    // mis de côté au démarrage, juste avant que l'encodeur ne s'en serve.
+    // Juste avant que l'encodeur n'alloue sa trame de référence : rendre le bloc contigu réservé.
     if (reserve_) {
         heap_caps_free(reserve_);
         reserve_ = nullptr;
@@ -239,7 +191,61 @@ bool Tab5Capture::openPipeline(std::string* error) {
         *error = errMsg("H.264 : démarrage (sortie) impossible");
         return false;
     }
-    type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    encoderReady_ = true;
+    return true;
+}
+
+// La caméra, elle, est ouverte et fermée à chaque enregistrement : ses tampons d'image sont
+// volumineux mais en PSRAM, donc sans incidence sur la RAM interne rare.
+bool Tab5Capture::openCamera(std::string* error) {
+    camFd_ = open(ESP_VIDEO_MIPI_CSI_DEVICE_NAME, O_RDONLY);
+    if (camFd_ < 0) {
+        *error = errMsg("Caméra absente ou non branchée");
+        return false;
+    }
+    struct v4l2_format fmt = {};
+    fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if (ioctl(camFd_, VIDIOC_G_FMT, &fmt) != 0) {
+        *error = errMsg("Caméra : format inconnu");
+        return false;
+    }
+    width_ = static_cast<int>(fmt.fmt.pix.width);
+    height_ = static_cast<int>(fmt.fmt.pix.height);
+    ESP_LOGI(TAG, "capteur %dx%d", width_, height_);
+    struct v4l2_format want = {};
+    want.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    want.fmt.pix.width = width_;
+    want.fmt.pix.height = height_;
+    want.fmt.pix.pixelformat = V4L2_PIX_FMT_YUV420;
+    if (ioctl(camFd_, VIDIOC_S_FMT, &want) != 0) {
+        *error = errMsg("Caméra : YUV420 refusé");
+        return false;
+    }
+    struct v4l2_requestbuffers req = {};
+    req.count = CAM_BUFFERS;
+    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory = V4L2_MEMORY_MMAP;
+    if (ioctl(camFd_, VIDIOC_REQBUFS, &req) != 0) {
+        *error = errMsg("Caméra : mémoire insuffisante");
+        return false;
+    }
+    for (int i = 0; i < CAM_BUFFERS; i++) {
+        struct v4l2_buffer buf = {};
+        buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+        buf.memory = V4L2_MEMORY_MMAP;
+        buf.index = i;
+        if (ioctl(camFd_, VIDIOC_QUERYBUF, &buf) != 0) {
+            *error = "Caméra : tampon refusé";
+            return false;
+        }
+        camBuf_[i] = static_cast<uint8_t*>(mmap(nullptr, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, camFd_, buf.m.offset));
+        camBufLen_[i] = buf.length;
+        if (!camBuf_[i] || ioctl(camFd_, VIDIOC_QBUF, &buf) != 0) {
+            *error = "Caméra : tampon refusé";
+            return false;
+        }
+    }
+    int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (ioctl(camFd_, VIDIOC_STREAMON, &type) != 0) {
         *error = errMsg("Caméra : démarrage du flux impossible");
         return false;
@@ -247,29 +253,21 @@ bool Tab5Capture::openPipeline(std::string* error) {
     return true;
 }
 
-void Tab5Capture::closePipeline() {
+void Tab5Capture::closeCamera() {
+    if (camFd_ < 0) return;
     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    if (camFd_ >= 0) {
-        ioctl(camFd_, VIDIOC_STREAMOFF, &type);
-        for (int i = 0; i < CAM_BUFFERS; i++) {
-            if (camBuf_[i]) munmap(camBuf_[i], camBufLen_[i]);
-            camBuf_[i] = nullptr;
-        }
-        close(camFd_);
-        camFd_ = -1;
+    ioctl(camFd_, VIDIOC_STREAMOFF, &type);
+    for (int i = 0; i < CAM_BUFFERS; i++) {
+        if (camBuf_[i]) munmap(camBuf_[i], camBufLen_[i]);
+        camBuf_[i] = nullptr;
     }
-    if (encFd_ >= 0) {
-        type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-        ioctl(encFd_, VIDIOC_STREAMOFF, &type);
-        type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-        ioctl(encFd_, VIDIOC_STREAMOFF, &type);
-        if (encBuf_) munmap(encBuf_, encBufLen_);
-        encBuf_ = nullptr;
-        close(encFd_);
-        encFd_ = -1;
-    }
-    // L'encodeur a rendu sa mémoire : on remet le bloc de côté pour le prochain enregistrement.
-    reserveInternal();
+    struct v4l2_requestbuffers req = {};
+    req.count = 0;
+    req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    req.memory = V4L2_MEMORY_MMAP;
+    ioctl(camFd_, VIDIOC_REQBUFS, &req);
+    close(camFd_);
+    camFd_ = -1;
 }
 
 bool Tab5Capture::start(hal::MediaSink* sink, hal::CaptureInfo* info, std::string* error) {
@@ -279,9 +277,11 @@ bool Tab5Capture::start(hal::MediaSink* sink, hal::CaptureInfo* info, std::strin
         return false;
     }
     if (!initCamera(error)) return false;
-    if (!openPipeline(error)) {
+    // La caméra d'abord (elle fixe la résolution attendue par l'encodeur), puis l'encodeur
+    // (ouvert une seule fois, gardé ensuite), que l'on recâble sur la nouvelle caméra.
+    if (!openCamera(error) || !openEncoder(error)) {
         ESP_LOGE(TAG, "%s", error->c_str());
-        closePipeline();
+        closeCamera();
         return false;
     }
     if (!videoDone_) videoDone_ = xSemaphoreCreateBinary();
@@ -310,7 +310,9 @@ void Tab5Capture::stop() {
     running_ = false;
     xSemaphoreTake(videoDone_, pdMS_TO_TICKS(3000));
     if (audioOn_) xSemaphoreTake(audioDone_, pdMS_TO_TICKS(3000));
-    closePipeline();
+    // On ferme la caméra mais on garde l'encodeur allumé (sa mémoire reste réservée) pour que
+    // l'enregistrement suivant ne retombe pas sur le problème de RAM interne morcelée.
+    closeCamera();
     sink_ = nullptr;
     ESP_LOGI(TAG, "enregistrement arrêté");
 }
@@ -330,6 +332,9 @@ void Tab5Capture::audioTaskMain(void* arg) {
 }
 
 void Tab5Capture::videoLoop() {
+    bool gotKey = false;   // l'encodeur tourne en continu : on démarre la vidéo à une image clé
+    bool logged = false;   // diagnostic : une seule fois par enregistrement
+    int frames = 0;
     while (running_) {
         struct v4l2_buffer camBuf = {};
         camBuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
@@ -340,6 +345,22 @@ void Tab5Capture::videoLoop() {
             continue;
         }
         int64_t pts = esp_timer_get_time() - t0_;
+
+        // Diagnostic sur la 1re image : la caméra capture-t-elle vraiment ? (sinon plan Y uniforme)
+        if (!logged && camBuf.bytesused > 0) {
+            const uint8_t* y = camBuf_[camBuf.index];
+            size_t n = std::min<size_t>(camBuf.bytesused, static_cast<size_t>(width_) * height_);
+            uint8_t lo = 255, hi = 0;
+            uint64_t sum = 0;
+            for (size_t i = 0; i < n; i += 64) {
+                lo = std::min(lo, y[i]);
+                hi = std::max(hi, y[i]);
+                sum += y[i];
+            }
+            ESP_LOGI(TAG, "1re image caméra : %u o, luminance min %u max %u moy %u (si min==max, la caméra ne filme pas)",
+                     static_cast<unsigned>(camBuf.bytesused), lo, hi, static_cast<unsigned>(sum / (n / 64 + 1)));
+            logged = true;
+        }
 
         struct v4l2_buffer in = {};
         in.index = 0;
@@ -354,19 +375,28 @@ void Tab5Capture::videoLoop() {
         ioctl(camFd_, VIDIOC_QBUF, &camBuf);
         if (encoded) {
             ioctl(encFd_, VIDIOC_DQBUF, &in);
-            hal::MediaPacket p;
-            p.video = true;
-            p.ptsUs = pts;
-            p.data.assign(reinterpret_cast<const char*>(encBuf_), outBuf.bytesused);
-            p.key = hasKeyNal(encBuf_, outBuf.bytesused);
+            bool key = hasKeyNal(encBuf_, outBuf.bytesused);
+            if (!gotKey && key) {
+                gotKey = true;
+                ESP_LOGI(TAG, "1re image clé (SPS/PPS) à %u o", static_cast<unsigned>(outBuf.bytesused));
+            }
+            if (gotKey) {
+                hal::MediaPacket p;
+                p.video = true;
+                p.ptsUs = pts;
+                p.data.assign(reinterpret_cast<const char*>(encBuf_), outBuf.bytesused);
+                p.key = key;
+                if (sink_ && running_) sink_->onPacket(std::move(p));
+                frames++;
+            }
             outBuf.index = 0;
             ioctl(encFd_, VIDIOC_QBUF, &outBuf);
-            if (sink_ && running_) sink_->onPacket(std::move(p));
         } else {
             ESP_LOGE(TAG, "compression H.264 impossible");
             vTaskDelay(pdMS_TO_TICKS(20));
         }
     }
+    ESP_LOGI(TAG, "vidéo : %d images envoyées en %lld ms", frames, (esp_timer_get_time() - t0_) / 1000);
 }
 
 void Tab5Capture::audioLoop() {

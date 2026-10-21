@@ -31,8 +31,9 @@ public:
 
 private:
     bool initCamera(std::string* error);
-    bool openPipeline(std::string* error);
-    void closePipeline();
+    bool openEncoder(std::string* error);  // une fois, gardé allumé
+    bool openCamera(std::string* error);   // à chaque enregistrement
+    void closeCamera();
     static void videoTaskMain(void* arg);
     static void audioTaskMain(void* arg);
     void videoLoop();
@@ -42,6 +43,7 @@ private:
     hal::MediaSink* sink_ = nullptr;
     std::atomic<bool> running_{false};
     bool videoInit_ = false;
+    bool encoderReady_ = false;  // encodeur ouvert et allumé (mémoire allouée une fois pour toutes)
     int camFd_ = -1;
     int encFd_ = -1;
     uint8_t* camBuf_[3] = {};
