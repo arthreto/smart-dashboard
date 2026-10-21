@@ -8,7 +8,10 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_SPEED_200M=y
 CONFIG_SPIRAM_XIP_FROM_PSRAM=y
-CONFIG_CACHE_L2_CACHE_256KB=y
+# Cache L2 de 128 Ko (valeur par défaut d'ESP-IDF ; la démo M5Stack en prend 256) : les
+# 128 Ko rendus deviennent de la RAM interne d'un seul tenant, indispensable à l'encodeur
+# H.264 de la galerie (trame de référence de ~92 Ko). Interface à peine plus lente.
+CONFIG_CACHE_L2_CACHE_128KB=y
 CONFIG_CACHE_L2_CACHE_LINE_128B=y
 CONFIG_FREERTOS_HZ=1000
 CONFIG_IDF_EXPERIMENTAL_FEATURES=y
