@@ -62,6 +62,10 @@ void Tab5Hal::begin() {
     }
     ESP_ERROR_CHECK(err);
 
+    // Très tôt (RAM interne encore intacte) : mettre de côté le bloc contigu dont l'encodeur
+    // H.264 de la galerie a besoin. Rendu le temps d'un enregistrement.
+    capture_.reserveInternal();
+
     // Bus I2C interne, extenseurs d'E/S (alimentations, reset écran, Wi-Fi…), charge.
     ESP_ERROR_CHECK(bsp_i2c_init());
     i2c_master_bus_handle_t bus = bsp_i2c_get_handle();

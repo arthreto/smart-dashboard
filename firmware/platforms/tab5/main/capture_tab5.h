@@ -17,6 +17,14 @@
 
 class Tab5Capture {
 public:
+    /**
+     * Met de côté, au démarrage (RAM interne encore intacte), le bloc contigu dont l'encodeur
+     * H.264 a besoin pour sa trame de référence. Il est rendu juste avant un enregistrement,
+     * puis repris à la fin : sans ça, la RAM interne, suffisante mais morcelée, ne fournit plus
+     * de bloc assez grand.
+     */
+    void reserveInternal();
+
     bool start(hal::MediaSink* sink, hal::CaptureInfo* info, std::string* error);
     void stop();
     bool running() const { return running_; }
@@ -45,4 +53,5 @@ private:
     SemaphoreHandle_t videoDone_ = nullptr;
     SemaphoreHandle_t audioDone_ = nullptr;
     bool audioOn_ = false;
+    void* reserve_ = nullptr;  // bloc de RAM interne gardé pour l'encodeur (voir reserveInternal)
 };

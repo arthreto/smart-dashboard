@@ -89,6 +89,19 @@ esptool.py --chip esp32p4 merge_bin -o smart-dashboard-tab5.bin --flash_mode dio
 La partie **Console** de la même page (115200 bauds, puis appui bref sur le bouton) affiche les
 messages de démarrage, utiles en cas d'écran noir.
 
+#### Mise à jour sans tout réappairer
+
+Écrire le fichier complet à `0x0` réécrit toute la flash, y compris la zone NVS (`0x9000`)
+où sont enregistrés le Wi-Fi et l'appairage : il faut alors tout refaire. Pour une simple
+mise à jour, ne flasher que l'application, qui laisse la NVS intacte :
+
+- fichier `smart-dashboard-tab5-app.bin` (c'est `build/smart_dashboard.bin`) ;
+- à l'adresse **0x50000** (et surtout **ne pas** cliquer sur « Erase Flash »).
+
+Le chargeur d'amorçage et la table des partitions ne changent pas d'une version à l'autre ;
+le réglage du cache L2 est appliqué par l'application au démarrage. Un flash complet à `0x0`
+n'est donc nécessaire qu'à la première installation (ou pour repartir de zéro).
+
 ### Avec ESP-IDF
 
 1. Branche la Tab5 en USB-C.
