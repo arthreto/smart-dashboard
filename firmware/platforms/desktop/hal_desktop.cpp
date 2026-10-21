@@ -2,6 +2,15 @@
 
 #include <SDL2/SDL.h>
 #include <curl/curl.h>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <openssl/rsa.h>
+#include <openssl/x509.h>
+#ifndef _WIN32
+#include <signal.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -368,3 +377,222 @@ std::string DesktopHal::firmwareVersion() {
     return "0.1.0-sim";
 #endif
 }
+
+// ---------------------------------------------------------------- chiffrement (OpenSSL)
+
+void DesktopHal::randomBytes(uint8_t* out, size_t len) { RAND_bytes(out, static_cast<int>(len)); }
+
+std::string DesktopHal::aesGcmEncrypt(const std::string& key, const std::string& iv, const std::string& aad, const std::string& plain) {
+    if (key.size() != 32) return {};
+    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
+    std::string out(plain.size() + 16, '\0');
+    int len = 0, total = 0;
+    bool ok = ctx && EVP_EncryptInit_ex(ctx, EVP_aes_256_gcm(), nullptr, nullptr, nullptr) == 1 &&
+              EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, static_cast<int>(iv.size()), nullptr) == 1 &&
+              EVP_EncryptInit_ex(ctx, nullptr, nullptr, reinterpret_cast<const unsigned char*>(key.data()),
+                                 reinterpret_cast<const unsigned char*>(iv.data())) == 1 &&
+              EVP_EncryptUpdate(ctx, nullptr, &len, reinterpret_cast<const unsigned char*>(aad.data()), static_cast<int>(aad.size())) == 1 &&
+              EVP_EncryptUpdate(ctx, reinterpret_cast<unsigned char*>(&out[0]), &len, reinterpret_cast<const unsigned char*>(plain.data()),
+                                static_cast<int>(plain.size())) == 1;
+    total = len;
+    ok = ok && EVP_EncryptFinal_ex(ctx, reinterpret_cast<unsigned char*>(&out[0]) + total, &len) == 1;
+    total += len;
+    ok = ok && EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, 16, &out[total]) == 1;
+    if (ctx) EVP_CIPHER_CTX_free(ctx);
+    if (!ok) return {};
+    out.resize(static_cast<size_t>(total) + 16);
+    return out;
+}
+
+std::string DesktopHal::rsaOaepEncrypt(const std::string& spkiDer, const std::string& plain) {
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(spkiDer.data());
+    EVP_PKEY* key = d2i_PUBKEY(nullptr, &p, static_cast<long>(spkiDer.size()));
+    if (!key) return {};
+    EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(key, nullptr);
+    std::string out;
+    size_t outLen = 0;
+    bool ok = ctx && EVP_PKEY_encrypt_init(ctx) == 1 && EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) == 1 &&
+              EVP_PKEY_CTX_set_rsa_oaep_md(ctx, EVP_sha256()) == 1 && EVP_PKEY_CTX_set_rsa_mgf1_md(ctx, EVP_sha256()) == 1 &&
+              EVP_PKEY_encrypt(ctx, nullptr, &outLen, reinterpret_cast<const unsigned char*>(plain.data()), plain.size()) == 1;
+    if (ok) {
+        out.resize(outLen);
+        ok = EVP_PKEY_encrypt(ctx, reinterpret_cast<unsigned char*>(&out[0]), &outLen, reinterpret_cast<const unsigned char*>(plain.data()),
+                              plain.size()) == 1;
+        out.resize(outLen);
+    }
+    if (ctx) EVP_PKEY_CTX_free(ctx);
+    EVP_PKEY_free(key);
+    return ok ? out : std::string();
+}
+
+// ---------------------------------------------------------------- caméra simulée (ffmpeg)
+
+#ifndef _WIN32
+namespace {
+
+/** Lance `cmd` (via /bin/sh) et renvoie le descripteur de sa sortie standard. */
+int spawnReader(const std::string& cmd, int* pidOut) {
+    int fds[2];
+    if (pipe(fds) != 0) return -1;
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(fds[0]);
+        close(fds[1]);
+        return -1;
+    }
+    if (pid == 0) {
+        dup2(fds[1], 1);
+        close(fds[0]);
+        close(fds[1]);
+        execl("/bin/sh", "sh", "-c", cmd.c_str(), static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    close(fds[1]);
+    *pidOut = pid;
+    return fds[0];
+}
+
+bool readAll(int fd, std::string& buf) {
+    char tmp[65536];
+    ssize_t n = read(fd, tmp, sizeof tmp);
+    if (n <= 0) return false;
+    buf.append(tmp, static_cast<size_t>(n));
+    return true;
+}
+
+bool haveFfmpeg() { return std::system("ffmpeg -hide_banner -version >/dev/null 2>&1") == 0; }
+
+}  // namespace
+
+bool DesktopHal::cameraSupported() {
+    static int ok = -1;
+    if (ok < 0) ok = haveFfmpeg() ? 1 : 0;
+    return ok == 1;
+}
+
+bool DesktopHal::startCapture(hal::MediaSink* sink, hal::CaptureInfo* info, std::string* error) {
+    std::lock_guard<std::mutex> lock(captureMutex_);
+    if (capturing_) {
+        *error = "Enregistrement déjà en cours";
+        return false;
+    }
+    if (!cameraSupported()) {
+        *error = "ffmpeg introuvable (sudo apt install ffmpeg)";
+        return false;
+    }
+    const char* env = std::getenv("SD_CAMERA");
+    std::string cam = env ? env : "";
+    if (cam.empty()) cam = fs::exists("/dev/video0") ? "/dev/video0" : "mire";
+    std::string input = cam == "mire" ? "-re -f lavfi -i testsrc2=size=1280x720:rate=30"
+                                      : "-f v4l2 -framerate 30 -video_size 1280x720 -i " + cam;
+    // Même forme de flux que l'encodeur de la Tab5 : H.264 Annex B, sans images B, une image
+    // clé par seconde avec ses paramètres (SPS/PPS) ; délimiteur (AUD) avant chaque image.
+    std::string vcmd = "exec ffmpeg -hide_banner -loglevel error " + input +
+                       " -vf scale=1280:720,format=yuv420p -c:v libx264 -preset ultrafast -tune zerolatency -profile:v baseline"
+                       " -bf 0 -g 30 -b:v 2M -x264-params aud=1:repeat-headers=1 -f h264 - 2>/dev/null";
+    std::string acmd =
+        "exec ffmpeg -hide_banner -loglevel error -re -f lavfi -i \"sine=frequency=660:sample_rate=48000:beep_factor=4\" -af volume=0.3"
+        " -ac 1 -c:a aac -b:a 64k -f adts - 2>/dev/null";
+    int vfd = spawnReader(vcmd, &videoPid_);
+    int afd = spawnReader(acmd, &audioPid_);
+    if (vfd < 0 || afd < 0) {
+        *error = "ffmpeg n'a pas démarré";
+        return false;
+    }
+    info->width = 1280;
+    info->height = 720;
+    info->fps = 30;
+    info->audioRate = 48000;
+    info->audioChannels = 1;
+    info->audioConfig = std::string("\x11\x88", 2);
+    sink_ = sink;
+    capturing_ = true;
+    videoThread_ = std::thread(&DesktopHal::videoReader, this, vfd);
+    audioThread_ = std::thread(&DesktopHal::audioReader, this, afd);
+    std::fprintf(stderr, "[caméra] capture ffmpeg démarrée (%s)\n", cam.c_str());
+    return true;
+}
+
+void DesktopHal::stopCapture() {
+    std::lock_guard<std::mutex> lock(captureMutex_);
+    if (!capturing_) return;
+    capturing_ = false;
+    for (int* pid : {&videoPid_, &audioPid_}) {
+        if (*pid > 0) {
+            kill(*pid, SIGTERM);
+            waitpid(*pid, nullptr, 0);
+        }
+        *pid = -1;
+    }
+    if (videoThread_.joinable()) videoThread_.join();
+    if (audioThread_.joinable()) audioThread_.join();
+    sink_ = nullptr;
+}
+
+void DesktopHal::videoReader(int fd) {
+    // Découpe le flux en images : chaque image commence par un délimiteur 00 00 00 01 09.
+    std::string buf;
+    int64_t frame = 0;
+    auto emit = [&](const std::string& au) {
+        hal::MediaPacket p;
+        p.video = true;
+        p.ptsUs = frame * 1000000 / 30;
+        frame++;
+        p.data = au;
+        for (size_t i = 0; i + 4 < au.size(); i++) {
+            if (au[i] == 0 && au[i + 1] == 0 && au[i + 2] == 1) {
+                int type = au[i + 3] & 0x1F;
+                if (type == 5 || type == 7) p.key = true;
+            }
+        }
+        if (capturing_ && sink_) sink_->onPacket(std::move(p));
+    };
+    static const std::string AUD("\x00\x00\x00\x01\x09", 5);
+    while (readAll(fd, buf)) {
+        for (;;) {
+            size_t start = buf.find(AUD);
+            if (start == std::string::npos) break;
+            size_t next = buf.find(AUD, start + AUD.size());
+            if (next == std::string::npos) break;
+            emit(buf.substr(start, next - start));
+            buf.erase(0, next);
+        }
+    }
+    if (buf.size() > AUD.size()) emit(buf);
+    close(fd);
+}
+
+void DesktopHal::audioReader(int fd) {
+    // Trames ADTS : on retire l'en-tête (7 ou 9 octets) pour garder l'AAC brut.
+    std::string buf;
+    int64_t frame = 0;
+    while (readAll(fd, buf)) {
+        while (buf.size() >= 7) {
+            auto b = [&](size_t i) { return static_cast<uint8_t>(buf[i]); };
+            if (b(0) != 0xFF || (b(1) & 0xF0) != 0xF0) {
+                buf.erase(0, 1);
+                continue;
+            }
+            size_t len = ((b(3) & 0x03) << 11) | (b(4) << 3) | (b(5) >> 5);
+            size_t head = (b(1) & 0x01) ? 7 : 9;
+            if (len < head || buf.size() < len) break;
+            hal::MediaPacket p;
+            p.video = false;
+            p.key = true;
+            p.ptsUs = frame * 1024 * 1000000 / 48000;
+            frame++;
+            p.data = buf.substr(head, len - head);
+            buf.erase(0, len);
+            if (capturing_ && sink_) sink_->onPacket(std::move(p));
+        }
+    }
+    close(fd);
+}
+#else
+bool DesktopHal::cameraSupported() { return false; }
+bool DesktopHal::startCapture(hal::MediaSink*, hal::CaptureInfo*, std::string* error) {
+    *error = "Pas de caméra dans l'émulateur Windows";
+    return false;
+}
+void DesktopHal::stopCapture() {}
+#endif

@@ -22,6 +22,7 @@
 #include <string>
 
 #include "hal.h"
+#include "capture_tab5.h"
 #include "iphone_ble.h"
 #include "lvgl.h"
 #include "rx8130.h"
@@ -70,10 +71,21 @@ public:
     void phoneForget() override { iphone_.forget(); }
     void phoneAction(uint32_t uid, bool positive) override { iphone_.action(uid, positive); }
 
+    // Caméra et micro (galerie), chiffrement matériel (mbedTLS)
+    bool cameraSupported() override { return true; }
+    bool startCapture(hal::MediaSink* sink, hal::CaptureInfo* info, std::string* error) override {
+        return capture_.start(sink, info, error);
+    }
+    void stopCapture() override { capture_.stop(); }
+    void randomBytes(uint8_t* out, size_t len) override;
+    std::string aesGcmEncrypt(const std::string& key, const std::string& iv, const std::string& aad, const std::string& plain) override;
+    std::string rsaOaepEncrypt(const std::string& spkiDer, const std::string& plain) override;
+
     std::string firmwareVersion() override;
     std::string platformName() override { return "M5Stack Tab5"; }
 
 private:
+    Tab5Capture capture_;
     void initWifi();
     void connectSaved();
     void startConnect();

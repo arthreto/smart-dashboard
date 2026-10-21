@@ -11,6 +11,7 @@ import { AdminOverviewPage } from './pages/admin/AdminOverviewPage';
 import { AdminServicesPage } from './pages/admin/AdminServicesPage';
 import { AdminUsersPage } from './pages/admin/AdminUsersPage';
 import { LoginScreen, SetupScreen } from './pages/AuthScreen';
+import { GalleryPage } from './pages/GalleryPage';
 import { HabitsPage } from './pages/HabitsPage';
 import { InvitePage } from './pages/InvitePage';
 import { OverviewPage } from './pages/OverviewPage';
@@ -78,6 +79,7 @@ function AuthGate() {
         <Route path="/ecrans" element={<ScreensPage />} />
         <Route path="/ecrans/:id" element={<ScreenPage />} />
         <Route path="/habitudes" element={<HabitsPage />} />
+        <Route path="/galerie" element={<GalleryPage />} />
         <Route path="/services" element={<ServicesPage />} />
         <Route path="/compte" element={<AccountPage />} />
         <Route

@@ -16,6 +16,7 @@ matérielle propre à la tablette (`main/hal_tab5.cpp`).
 | Batterie | INA226 (tension de la batterie 2 cellules), USB-C détecté = en charge |
 | Son des alarmes et clics | codec ES8388 + haut-parleur, sonneries synthétisées (même son que l'émulateur) |
 | Veille profonde | extinction complète ; l'horloge RX8130 rallume la tablette 2 min avant l'alarme suivante (et avant la routine de pré-éclairage) |
+| Galerie : vidéo + son, chiffrés sur la tablette puis envoyés au serveur | caméra SC2356 (MIPI-CSI 1280×720, 30 i/s) et encodeur H.264 matériel (`esp_video`), micros ES7210 en AAC (`esp_audio_codec`), AES-256-GCM et RSA-OAEP (mbedTLS) |
 | iPhone : notifications, appels entrants (accepter / refuser) | Bluetooth basse consommation de l'ESP32-C6 (même firmware ESP-Hosted que le Wi-Fi), pile NimBLE sur le P4, service Apple ANCS |
 
 Limites actuelles :
@@ -57,15 +58,38 @@ idf.py set-target esp32p4
 idf.py build
 ```
 
-(Le projet a été compilé avec ESP-IDF 5.4.2 pour l'ESP32-P4 : environ 2,5 Mo, la
-partition de 12 Mo en laisse 80 % de libre. Il n'a pas encore pu être essayé sur une
-vraie tablette.)
+(Le projet a été compilé avec ESP-IDF 5.4.2 pour l'ESP32-P4 : environ 3,7 Mo, la
+partition de 12 Mo en laisse 70 % de libre.)
 
 La première compilation télécharge les composants (LVGL, ESP-Hosted, pilotes
 d'écran et du codec…) depuis le registre d'Espressif et prend une dizaine de
 minutes. `set-target` n'est à refaire que si tu supprimes le dossier `build`.
 
 ## 3. Flasher
+
+### Sans rien installer (navigateur Chrome ou Edge)
+
+Un seul fichier contient tout (chargeur, table des partitions, application) : on l'écrit à
+l'adresse `0x0` avec [esptool-js](https://espressif.github.io/esptool-js/).
+
+1. Branche la Tab5 en USB-C (câble de données) et mets-la en mode téléchargement :
+   bouton appuyé jusqu'à ce que la LED verte clignote vite.
+2. Sur la page, **Connect**, choisis le port (« USB JTAG/serial debug unit »).
+3. Adresse **0x0**, fichier `smart-dashboard-tab5.bin`, puis **Program**.
+4. À la fin, débranche/rebranche et fais un appui bref sur le bouton.
+
+Pour produire ce fichier après une compilation :
+
+```bash
+cd build
+esptool.py --chip esp32p4 merge_bin -o smart-dashboard-tab5.bin --flash_mode dio --flash_size 16MB --flash_freq 80m \
+  0x2000 bootloader/bootloader.bin 0x8000 partition_table/partition-table.bin 0x50000 smart_dashboard.bin
+```
+
+La partie **Console** de la même page (115200 bauds, puis appui bref sur le bouton) affiche les
+messages de démarrage, utiles en cas d'écran noir.
+
+### Avec ESP-IDF
 
 1. Branche la Tab5 en USB-C.
 2. Trouve son port : Gestionnaire de périphériques → « Ports (COM et LPT) »
@@ -123,6 +147,20 @@ version d'`esp_lvgl_port` adaptée par M5Stack sont copiées depuis la démo
 officielle **M5Tab5-UserDemo** (licence Apache-2.0), pour que le projet se
 compile sans étape supplémentaire.
 
+
+## Galerie (enregistrements vidéo)
+
+Dans la console, l'onglet **Galerie** lance et arrête un enregistrement de la caméra de la
+tablette. Pendant l'enregistrement, la tablette affiche en haut de l'écran une pastille
+**« ● REC 00:42 »** avec un bouton **Arrêter** ; personne ne peut être filmé sans le voir.
+
+- La vidéo (1280×720, 30 images/s, environ 2 Mb/s, son AAC) est chiffrée sur la tablette
+  avant l'envoi, par morceaux de 3 secondes. Le serveur ne reçoit que des données illisibles.
+- Si le Wi-Fi coupe, la tablette garde la vidéo en mémoire (12 Mo, soit environ 45 secondes) et
+  envoie le retard dès que la connexion revient.
+- Un enregistrement dure 1 heure au plus. La veille profonde est suspendue pendant ce temps.
+- Les messages de la caméra sont visibles dans le moniteur série (préfixes `camera` et
+  `[galerie]`).
 
 ## Associer ton iPhone
 

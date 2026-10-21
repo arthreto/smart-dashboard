@@ -136,6 +136,9 @@ private:
     void hidePhoneBanner();
     void showIncomingCall(const hal::PhoneState& st);
     void closeIncomingCall();
+    void onWake();
+    void startRecording(const std::string& json);
+    void updateRecBadge();
 
     State state_;
     Screen screen_ = Screen::Home;
@@ -144,6 +147,9 @@ private:
     static inline bool demoRequested_ = false;
     bool online_ = false;
     bool polling_ = false;
+    bool repoll_ = false;     // réveil reçu pendant une synchro : en refaire une juste après
+    lv_obj_t* recBadge_ = nullptr;
+    lv_obj_t* recLabel_ = nullptr;
     bool locked_ = false;
     bool screenOff_ = false;
     bool ringing_ = false;

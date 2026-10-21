@@ -224,6 +224,42 @@ const MAIN_MIGRATIONS: string[] = [
   );
   CREATE INDEX events_ts ON events(ts);
   `,
+  // 2 — galerie : vidéos chiffrées de bout en bout. Le serveur ne garde que la clé publique
+  // de chaque compte et sa clé privée chiffrée par le code secret (dérivé dans le navigateur) :
+  // il ne peut déchiffrer ni la clé ni les vidéos. Les morceaux sont des fichiers
+  // DATA_DIR/gallery/<compte>/<vidéo>/<n>.bin.
+  `
+  CREATE TABLE gallery_keys (
+    user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    public_key TEXT NOT NULL,
+    private_key_enc TEXT NOT NULL,
+    kdf TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE gallery_videos (
+    id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    device_id INTEGER NOT NULL,
+    device_name TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK (status IN ('waiting', 'recording', 'done', 'error', 'cancelled')),
+    stop_requested INTEGER NOT NULL DEFAULT 0 CHECK (stop_requested IN (0, 1)),
+    error TEXT NOT NULL DEFAULT '',
+    wrapped_key TEXT,
+    nonce_prefix TEXT,
+    chunks INTEGER NOT NULL DEFAULT 0,
+    bytes INTEGER NOT NULL DEFAULT 0,
+    complete INTEGER NOT NULL DEFAULT 0 CHECK (complete IN (0, 1)),
+    duration_ms INTEGER,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    last_chunk_at TEXT,
+    ended_at TEXT
+  );
+  CREATE INDEX gallery_videos_user ON gallery_videos(user_id, created_at);
+  CREATE INDEX gallery_videos_device ON gallery_videos(device_id, status);
+  `,
 ];
 
 function openWith(file: string, migrations: string[]): DB {

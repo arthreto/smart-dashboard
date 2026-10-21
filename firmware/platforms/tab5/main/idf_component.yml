@@ -6,3 +6,7 @@ dependencies:
   lvgl/lvgl: "~9.2.2"
   espressif/esp_hosted: "1.4.0"
   espressif/esp_wifi_remote: "0.8.5"
+  # Galerie : encodeur H.264 matériel (requis par esp_video) et encodeur AAC. Versions
+  # compatibles avec les ESP32-P4 de révision 1.x (celle des Tab5 actuelles).
+  espressif/esp_h264: "1.0.4"
+  espressif/esp_audio_codec: "2.5.0"

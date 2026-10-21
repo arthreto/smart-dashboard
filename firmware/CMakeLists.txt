@@ -26,6 +26,7 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(SDL2 REQUIRED sdl2)
 find_package(CURL REQUIRED)
 find_package(Threads REQUIRED)
+find_package(OpenSSL REQUIRED)  # chiffrement des vidéos de la galerie
 target_include_directories(lvgl PUBLIC ${SDL2_INCLUDE_DIRS})
 
 file(GLOB APP_SOURCES
@@ -42,5 +43,5 @@ add_executable(smart_dashboard_sim
 
 target_include_directories(smart_dashboard_sim PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/app)
 target_compile_definitions(smart_dashboard_sim PRIVATE LV_LVGL_H_INCLUDE_SIMPLE SD_FIRMWARE_VERSION="0.1.0-sim")
-target_link_libraries(smart_dashboard_sim PRIVATE lvgl ${SDL2_LIBRARIES} CURL::libcurl Threads::Threads m)
+target_link_libraries(smart_dashboard_sim PRIVATE lvgl ${SDL2_LIBRARIES} CURL::libcurl OpenSSL::Crypto Threads::Threads m)
 target_link_directories(smart_dashboard_sim PRIVATE ${SDL2_LIBRARY_DIRS})

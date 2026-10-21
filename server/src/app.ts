@@ -14,6 +14,7 @@ import { authRoutes } from './routes/auth.js';
 import { adminRoutes } from './routes/admin.js';
 import { householdRoutes } from './routes/household.js';
 import { deviceRoutes } from './routes/device.js';
+import { galleryRoutes } from './routes/gallery.js';
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
@@ -88,7 +89,7 @@ export async function buildApp(db: DB, opts: { logger?: boolean } = {}): Promise
     if (!req.url.startsWith('/api/')) {
       reply.header(
         'Content-Security-Policy',
-        "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
       );
     }
     return payload;
@@ -118,6 +119,7 @@ export async function buildApp(db: DB, opts: { logger?: boolean } = {}): Promise
   householdRoutes(app, db);
   adminRoutes(app, db);
   deviceRoutes(app, db);
+  galleryRoutes(app, db);
 
   // Console web compilée (web/dist), servie par le même serveur.
   const hasWeb = fs.existsSync(path.join(config.webDir, 'index.html'));

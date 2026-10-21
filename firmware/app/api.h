@@ -38,6 +38,15 @@ enum class Lane { Api, Images };
 /** Exécute `work` dans un thread réseau, puis `done` dans le thread de l'interface. */
 void runInWorker(std::function<void()> work, std::function<void()> done, Lane lane = Lane::Api);
 
+/** Exécute `fn` dans le thread de l'interface (au prochain pump()). Utilisable depuis n'importe quel thread. */
+void postToUi(std::function<void()> fn);
+
+/**
+ * Attente longue (/api/v1/wait) dans un thread dédié : appelle `onWake` (thread de
+ * l'interface) dès que la console envoie quelque chose à l'écran.
+ */
+void startWakeListener(std::function<void()> onWake);
+
 /** Échappe une chaîne pour l'insérer dans du JSON. */
 std::string jsonEscape(const std::string& s);
 

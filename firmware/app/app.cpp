@@ -1,5 +1,8 @@
 #include "app.h"
 
+#include "recorder.h"
+#include "third_party/cjson/cJSON.h"
+
 #include <algorithm>
 #include <cstdio>
 #include <ctime>
@@ -77,6 +80,17 @@ void App::init() {
     applyBrightness();
     rebuild();
     if (!demo_ && api::configured()) poll();
+    if (!demo_) api::startWakeListener([] { App::get().onWake(); });
+}
+
+/** La console vient d'envoyer quelque chose à cet écran : synchro immédiate. */
+void App::onWake() {
+    if (demo_ || !api::configured()) return;
+    if (polling_) {
+        repoll_ = true;
+        return;
+    }
+    poll();
 }
 
 // ---------------------------------------------------------------- boucle
@@ -91,6 +105,7 @@ void App::loop() {
             lv_label_set_text(lbl, fmt == ClockFormat::HHMM ? util::hhmm(t).c_str() : util::longDate(t).c_str());
         }
         for (auto& fn : secondHooks_) fn();
+        updateRecBadge();
         checkAlarms();
         checkPower();
         if (t.tm_sec == 0) {
@@ -257,6 +272,12 @@ void App::poll() {
     if (!state_.stateHash.empty()) path += "?known=" + state_.stateHash;
     api::request("GET", path, "", [this](const hal::HttpResponse& r) {
         polling_ = false;
+        if (repoll_) {
+            // Réveil arrivé pendant la requête : sa réponse peut précéder le changement.
+            repoll_ = false;
+            lv_timer_t* t = lv_timer_create([](lv_timer_t*) { App::get().poll(); }, 50, nullptr);
+            lv_timer_set_repeat_count(t, 1);
+        }
         if (r.status == 200) {
             online_ = true;
             lastError_.clear();
@@ -338,6 +359,7 @@ void App::processCommands() {
         else if (c.type == "message") showMessage(c.text);
         else if (c.type == "reload") lastPollMs_ = hal::get().millis() - 1000000u;
         else if (c.type == "screenshot") takeScreenshot();
+        else if (c.type == "record_start") startRecording(c.text);
         else if (c.type == "reboot") {
             toast("Redémarrage demandé depuis la console…");
             lv_timer_t* t = lv_timer_create([](lv_timer_t*) { hal::get().reboot(); }, 2500, nullptr);
@@ -346,6 +368,74 @@ void App::processCommands() {
     }
     if (processedCommands_.size() > 64) processedCommands_.erase(processedCommands_.begin(), processedCommands_.begin() + 32);
     if (any) heartbeat();
+}
+
+// ---------------------------------------------------------------- galerie
+
+void App::startRecording(const std::string& json) {
+    cJSON* o = cJSON_Parse(json.c_str());
+    if (!o) return;
+    const cJSON* id = cJSON_GetObjectItemCaseSensitive(o, "videoId");
+    const cJSON* key = cJSON_GetObjectItemCaseSensitive(o, "publicKey");
+    if (cJSON_IsString(id) && cJSON_IsString(key)) {
+        if (!hal::get().cameraSupported()) {
+            // L'écran prévient le serveur pour que la console affiche l'erreur.
+            std::string vid = id->valuestring;
+            api::request("POST", "/api/v1/gallery/" + vid + "/fail", R"({"message":"Pas de caméra sur cet écran"})", nullptr);
+            toast("Enregistrement impossible : pas de caméra", true);
+        } else if (recorder::start(id->valuestring, key->valuestring)) {
+            updateRecBadge();
+        }
+    }
+    cJSON_Delete(o);
+}
+
+/**
+ * Pastille « ● REC 00:42 » en haut de l'écran pendant un enregistrement, avec un bouton
+ * pour l'arrêter : personne ne peut être filmé par la tablette sans le voir.
+ */
+void App::updateRecBadge() {
+    bool noticeError = false;
+    std::string notice = recorder::takeNotice(&noticeError);
+    if (!notice.empty()) toast(notice, noticeError);
+
+    recorder::Status st = recorder::status();
+    if (!st.active) {
+        if (recBadge_) {
+            lv_obj_delete(recBadge_);
+            recBadge_ = nullptr;
+            recLabel_ = nullptr;
+        }
+        return;
+    }
+    if (!recBadge_) {
+        recBadge_ = row(lv_layer_top(), 12);
+        lv_obj_set_height(recBadge_, 52);
+        lv_obj_set_style_pad_left(recBadge_, 20, 0);
+        lv_obj_set_style_pad_right(recBadge_, 6, 0);
+        lv_obj_set_style_radius(recBadge_, 26, 0);
+        setBg(recBadge_, lv_color_hex(0x1C1C1E), 235);
+        lv_obj_set_style_shadow_width(recBadge_, 24, 0);
+        lv_obj_set_style_shadow_opa(recBadge_, 80, 0);
+        dot(recBadge_, 14, color::red());
+        recLabel_ = label(recBadge_, "", &fig_s16, color::white());
+        lv_obj_t* b = button(recBadge_, "Arrêter", color::red(), color::white(), 40, 0, &fig_s14);
+        onClick(b, [] {
+            recorder::stop();
+            App::get().updateRecBadge();
+        });
+        lv_obj_align(recBadge_, LV_ALIGN_TOP_MID, RAIL_W / 2, 14);
+    }
+    std::string text;
+    int s = st.seconds;
+    char t[16];
+    std::snprintf(t, sizeof t, "%02d:%02d", s / 60, s % 60);
+    if (st.stopping) text = "Envoi de la fin…";
+    else text = std::string("REC ") + t + (st.offline ? " · réseau perdu, envoi en attente" : "");
+    lv_label_set_text(recLabel_, text.c_str());
+    // Le bouton disparaît une fois l'arrêt demandé.
+    lv_obj_t* btn = lv_obj_get_child(recBadge_, 2);
+    if (btn && st.stopping) lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
 }
 
 void App::takeScreenshot() {
@@ -360,6 +450,30 @@ void App::takeScreenshot() {
         std::copy(src, src + w * 2, bytes.begin() + static_cast<size_t>(y) * w * 2);
     }
     lv_draw_buf_destroy(buf);
+    // Superpositions (pastille REC, verrouillage, alarme, messages) : couche du dessus,
+    // capturée à part avec sa transparence puis fondue sur l'écran.
+    lv_draw_buf_t* top = lv_snapshot_take(lv_layer_top(), LV_COLOR_FORMAT_ARGB8888);
+    if (top) {
+        int tw = std::min<int>(w, top->header.w), thh = std::min<int>(h, top->header.h);
+        for (int y = 0; y < thh; y++) {
+            const uint8_t* src = top->data + static_cast<size_t>(y) * top->header.stride;
+            for (int x = 0; x < tw; x++) {
+                const uint8_t* px = src + x * 4;  // B G R A
+                unsigned a = px[3];
+                if (!a) continue;
+                uint8_t* dst = reinterpret_cast<uint8_t*>(&bytes[(static_cast<size_t>(y) * w + x) * 2]);
+                uint16_t c = static_cast<uint16_t>(dst[0] | (dst[1] << 8));
+                unsigned r = ((c >> 11) & 31) * 255 / 31, g = ((c >> 5) & 63) * 255 / 63, b = (c & 31) * 255 / 31;
+                r = (px[2] * a + r * (255 - a)) / 255;
+                g = (px[1] * a + g * (255 - a)) / 255;
+                b = (px[0] * a + b * (255 - a)) / 255;
+                c = static_cast<uint16_t>(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
+                dst[0] = c & 0xFF;
+                dst[1] = c >> 8;
+            }
+        }
+        lv_draw_buf_destroy(top);
+    }
     if (onScreenshotDone) onScreenshotDone(bytes);
     if (demo_ || !api::configured()) return;
     api::upload("/api/v1/screenshot", std::move(bytes), {{"X-Width", std::to_string(w)}, {"X-Height", std::to_string(h)}},
@@ -576,7 +690,8 @@ void App::checkPower() {
     }
     // Écran éteint depuis longtemps : veille profonde (la tablette redémarre au réveil).
     // Pas pendant une répétition d'alarme : elle n'existe qu'en mémoire et serait perdue.
-    if (!deepSlept_ && !snoozeUntil_ && s.deepSleepMinutes > 0 && h.millis() - screenOffSinceMs_ > static_cast<uint32_t>(s.deepSleepMinutes) * 60000u) {
+    // Ni pendant un enregistrement de la galerie (la caméra s'arrêterait).
+    if (!deepSlept_ && !snoozeUntil_ && !recorder::status().active && s.deepSleepMinutes > 0 && h.millis() - screenOffSinceMs_ > static_cast<uint32_t>(s.deepSleepMinutes) * 60000u) {
         deepSlept_ = true;
         int64_t wakeAt = 0;
         time_t now = time(nullptr);

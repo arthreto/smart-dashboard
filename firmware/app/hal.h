@@ -64,6 +64,29 @@ struct PhoneState {
     std::string incomingName;
 };
 
+/** Paquet compressé produit par la caméra (H.264, Annex B) ou le micro (AAC brut). */
+struct MediaPacket {
+    bool video = true;
+    bool key = false;        // image clé (IDR) pour la vidéo
+    int64_t ptsUs = 0;       // depuis le début de la capture
+    std::string data;
+};
+
+/** Description du flux : écrite (chiffrée) en tête de chaque vidéo. */
+struct CaptureInfo {
+    int width = 0, height = 0, fps = 0;
+    int audioRate = 0;       // 0 = pas de son
+    int audioChannels = 0;
+    std::string audioConfig; // AudioSpecificConfig AAC (2 octets)
+};
+
+/** Reçoit les paquets depuis les tâches de capture de la plateforme (thread quelconque). */
+class MediaSink {
+public:
+    virtual ~MediaSink() = default;
+    virtual void onPacket(MediaPacket&& packet) = 0;
+};
+
 class Hal {
 public:
     virtual ~Hal() = default;
@@ -115,6 +138,28 @@ public:
     virtual void phoneForget() {}
     /** Action sur une notification : positive (répondre, accepter) ou négative (effacer, refuser). */
     virtual void phoneAction(uint32_t uid, bool positive) { (void)uid; (void)positive; }
+
+    // --- Caméra + micro (enregistrements de la galerie) ---
+    virtual bool cameraSupported() { return false; }
+    /**
+     * Démarre la capture : les paquets arrivent dans `sink` jusqu'à stopCapture(). Bloquant
+     * (initialisation de la caméra) : à appeler depuis un thread de travail.
+     */
+    virtual bool startCapture(MediaSink* sink, CaptureInfo* info, std::string* error) {
+        (void)sink; (void)info;
+        if (error) *error = "Pas de caméra sur cet appareil";
+        return false;
+    }
+    /** Arrête la capture ; au retour, plus aucun paquet n'est envoyé au sink. */
+    virtual void stopCapture() {}
+
+    // --- Chiffrement (galerie) ---
+    virtual void randomBytes(uint8_t* out, size_t len) = 0;
+    /** AES-256-GCM : renvoie chiffré + étiquette de 16 octets ; vide en cas d'échec. */
+    virtual std::string aesGcmEncrypt(const std::string& key, const std::string& iv, const std::string& aad,
+                                      const std::string& plain) = 0;
+    /** RSA-OAEP (SHA-256) avec une clé publique SubjectPublicKeyInfo (DER) ; vide en cas d'échec. */
+    virtual std::string rsaOaepEncrypt(const std::string& spkiDer, const std::string& plain) = 0;
 
     // --- Divers ---
     virtual std::string firmwareVersion() = 0;

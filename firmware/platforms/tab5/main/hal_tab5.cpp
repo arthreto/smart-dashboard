@@ -7,7 +7,11 @@
 #include <esp_netif_sntp.h>
 #include <esp_system.h>
 #include <esp_timer.h>
+#include <esp_random.h>
 #include <esp_wifi.h>
+#include <mbedtls/gcm.h>
+#include <mbedtls/pk.h>
+#include <mbedtls/rsa.h>
 #include <nvs.h>
 #include <nvs_flash.h>
 #include <sys/time.h>
@@ -393,7 +397,14 @@ hal::HttpResponse Tab5Hal::http(const std::string& method, const std::string& ur
             res.error = std::string("connexion impossible (") + esp_err_to_name(err) + ")";
             break;
         }
-        if (toSend > 0 && esp_http_client_write(c, body.data(), toSend) != toSend) {
+        // Gros corps (vidéos, captures) : esp_http_client_write peut n'en écrire qu'une partie.
+        int sent = 0;
+        while (sent < toSend) {
+            int w = esp_http_client_write(c, body.data() + sent, std::min(toSend - sent, 16384));
+            if (w <= 0) break;
+            sent += w;
+        }
+        if (sent < toSend) {
             res.error = "envoi interrompu";
             esp_http_client_close(c);
             break;
@@ -625,3 +636,53 @@ void Tab5Hal::writeRtc(time_t utc) {
 uint32_t Tab5Hal::millis() { return static_cast<uint32_t>(esp_timer_get_time() / 1000); }
 
 std::string Tab5Hal::firmwareVersion() { return SD_FIRMWARE_VERSION; }
+
+// ---------------------------------------------------------------- chiffrement (galerie)
+
+void Tab5Hal::randomBytes(uint8_t* out, size_t len) { esp_fill_random(out, len); }
+
+std::string Tab5Hal::aesGcmEncrypt(const std::string& key, const std::string& iv, const std::string& aad, const std::string& plain) {
+    if (key.size() != 32) return {};
+    std::string out(plain.size() + 16, '\0');
+    mbedtls_gcm_context gcm;
+    mbedtls_gcm_init(&gcm);
+    int rc = mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, reinterpret_cast<const unsigned char*>(key.data()), 256);
+    if (rc == 0) {
+        auto* o = reinterpret_cast<unsigned char*>(&out[0]);
+        rc = mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, plain.size(), reinterpret_cast<const unsigned char*>(iv.data()), iv.size(),
+                                       reinterpret_cast<const unsigned char*>(aad.data()), aad.size(),
+                                       reinterpret_cast<const unsigned char*>(plain.data()), o, 16, o + plain.size());
+    }
+    mbedtls_gcm_free(&gcm);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "AES-GCM : erreur %d", rc);
+        return {};
+    }
+    return out;
+}
+
+std::string Tab5Hal::rsaOaepEncrypt(const std::string& spkiDer, const std::string& plain) {
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    std::string out;
+    int rc = mbedtls_pk_parse_public_key(&pk, reinterpret_cast<const unsigned char*>(spkiDer.data()), spkiDer.size());
+    if (rc == 0 && mbedtls_pk_get_type(&pk) == MBEDTLS_PK_RSA) {
+        mbedtls_rsa_context* rsa = mbedtls_pk_rsa(pk);
+        mbedtls_rsa_set_padding(rsa, MBEDTLS_RSA_PKCS_V21, MBEDTLS_MD_SHA256);
+        out.assign(mbedtls_rsa_get_len(rsa), '\0');
+        auto rng = [](void*, unsigned char* buf, size_t len) -> int {
+            esp_fill_random(buf, len);
+            return 0;
+        };
+        rc = mbedtls_rsa_rsaes_oaep_encrypt(rsa, rng, nullptr, nullptr, 0, plain.size(), reinterpret_cast<const unsigned char*>(plain.data()),
+                                            reinterpret_cast<unsigned char*>(&out[0]));
+    } else if (rc == 0) {
+        rc = -1;
+    }
+    mbedtls_pk_free(&pk);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "RSA-OAEP : erreur %d", rc);
+        return {};
+    }
+    return out;
+}

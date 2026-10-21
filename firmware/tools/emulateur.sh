@@ -18,6 +18,8 @@ command -v git >/dev/null || need+=(git)
 command -v pkg-config >/dev/null || need+=(pkg-config)
 pkg-config --exists sdl2 2>/dev/null || need+=(libsdl2-dev)
 [ -f /usr/include/curl/curl.h ] || [ -f /usr/include/x86_64-linux-gnu/curl/curl.h ] || need+=(libcurl4-openssl-dev)
+[ -f /usr/include/openssl/evp.h ] || need+=(libssl-dev)
+command -v ffmpeg >/dev/null || need+=(ffmpeg)  # caméra simulée (galerie)
 if [ ${#need[@]} -gt 0 ]; then
   echo "==> Installation des outils manquants : ${need[*]}"
   sudo apt-get update -qq

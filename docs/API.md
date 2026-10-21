@@ -165,6 +165,35 @@ Objet **Integration** :
 | GET | `/api/integrations/pathe/cinemas` | — | `[{ id, name, city }]` |
 | GET | `/api/integrations/icloud/calendars` | — | `[{ id, name, color }]` |
 
+## 6 bis. Galerie (vidéos chiffrées de bout en bout)
+
+Chaque compte a sa propre galerie, invisible des autres membres du foyer. Le serveur ne stocke
+que des données chiffrées : la clé privée du compte est chiffrée dans le navigateur par une clé
+dérivée du code secret (PBKDF2-SHA256, 600 000 itérations, AES-256-GCM), et chaque vidéo a sa
+clé AES-256 chiffrée par la tablette avec la clé publique RSA-OAEP (3072 bits, SHA-256).
+
+| Méthode | Route | Corps | Réponse |
+|---|---|---|---|
+| GET | `/api/gallery` | — | `{ configured, keys: { publicKey, privateKeyEnc, kdf: { name, hash, iterations, salt, iv } } \| null, devices: [{ id, name, busy, mine }], videos: [Video], usedBytes }` |
+| POST | `/api/gallery/setup` | `{ publicKey (SPKI base64), privateKeyEnc (base64), kdf }` (une seule fois) | `{ ok: true }` |
+| PUT | `/api/gallery/code` | `{ privateKeyEnc, kdf }` (même paire de clés, nouveau code) | `{ ok: true }` |
+| POST | `/api/gallery/reset` | `{ confirm: "EFFACER" }` | `{ ok: true }` — clés et vidéos effacées (code oublié) |
+| POST | `/api/gallery/record` | `{ deviceId }` | `Video` (`status: "waiting"`) ; l'écran reçoit la commande `record_start` aussitôt (attente longue) |
+| POST | `/api/gallery/videos/:id/stop` | — | `Video` (`stopRequested: true` ; annulée si l'écran n'avait pas commencé) |
+| GET | `/api/gallery/videos/:id` | — | `Video` + `{ wrappedKey, noncePrefix }` |
+| GET | `/api/gallery/videos/:id/chunks/:n` | — | morceau chiffré (binaire) |
+| DELETE | `/api/gallery/videos/:id` | — | `{ ok: true }` |
+
+`Video` : `{ id, deviceId, deviceName, status: "waiting" | "recording" | "done" | "error" | "cancelled", stopRequested, error, chunks, bytes, complete, durationMs, createdAt, startedAt, endedAt }`.
+Une demande non démarrée par l'écran en 2 minutes est annulée ; un enregistrement sans nouveau
+morceau depuis 3 minutes passe en `error` (la vidéo reste lisible jusqu'au dernier morceau).
+Quota par compte : `GALLERY_MAX_GB` (20 Go par défaut).
+
+**Format des morceaux.** Le morceau `n` est `AES-256-GCM(clé de la vidéo, nonce = noncePrefix (8 octets) ‖ n (32 bits gros-boutiste),
+données associées = "sdv1:<id>:<n>:<1 si dernier morceau, sinon 0>")`, étiquette de 16 octets à la fin. `wrappedKey` = RSA-OAEP(clé publique,
+clé de la vidéo (32 octets) ‖ noncePrefix). Une fois concaténés, les morceaux déchiffrés forment le flux décrit dans
+`firmware/app/recorder.h` (en-tête JSON, puis paquets H.264 Annex B et AAC-LC) ; la console en fait un MP4.
+
 ## 7. Administration — `/api/admin` (rôle `admin`)
 
 | Méthode | Route | Corps | Réponse |
@@ -201,6 +230,10 @@ Objet **Integration** :
 | POST | `/api/v1/cinema/notify/:filmId` | `{ notify }` | `{ ok: true }` |
 | GET | `/api/v1/image?src=<url>&w=&h=` | — | `image/jpeg` baseline redimensionnée (hôtes autorisés uniquement) |
 | POST | `/api/v1/screenshot` | corps binaire RGB565 little-endian, en-têtes `X-Width`, `X-Height` | `{ ok: true }` |
+| GET | `/api/v1/wait?timeout=25` | — (attente longue, 25 s au plus) | `{ wake: true }` dès que la console envoie quelque chose à l'écran (ou si une commande attend déjà), sinon `{ wake: false }` |
+| POST | `/api/v1/gallery/:id/start` | `{ wrappedKey, noncePrefix }` (base64) | `{ ok: true }`, ou 409 si l'enregistrement a été annulé |
+| POST | `/api/v1/gallery/:id/chunks/:n` | morceau chiffré (binaire, 4 Mo au plus) ; dernier : en-têtes `X-Final: 1`, `X-Duration-Ms` | `{ stop }` (`true` : arrêt demandé depuis la console) ; 409 si la vidéo est terminée |
+| POST | `/api/v1/gallery/:id/fail` | `{ message }` | `{ ok: true }` |
 
 **DeviceState** (`GET /api/v1/state`) — chaque bloc vaut `null` si l'intégration est désactivée ou n'a jamais réussi :
 
@@ -240,6 +273,9 @@ Objet **Integration** :
   "commands": [ { "id": 3, "type": "message", "text": "À table !" } ]
 }
 ```
+
+Commandes : `wake`, `lock`, `reboot`, `message` (`text`), `reload`, `screenshot`, et `record_start`
+(`text` = JSON `{ videoId, publicKey }`, valable 2 minutes) pour la galerie.
 
 `alarms`, `nextAlarm`, `routine`, `layout`, `settings` et `commands` sont ceux de l'écran qui fait la requête ; le reste est commun au foyer.
 

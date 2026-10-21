@@ -2,8 +2,10 @@
 // fichiers dans ~/.smart-dashboard-sim pour le stockage.
 #pragma once
 
+#include <atomic>
 #include <mutex>
 #include <string>
+#include <thread>
 
 #include "hal.h"
 #include "tones.h"
@@ -47,6 +49,15 @@ public:
     void simulateIncomingCall();
     void simulatePaired();
 
+    // Caméra simulée par ffmpeg : webcam (/dev/video0) si présente, sinon mire de test ;
+    // son : bip de test. SD_CAMERA=mire force la mire, SD_CAMERA=/dev/videoN choisit la webcam.
+    bool cameraSupported() override;
+    bool startCapture(hal::MediaSink* sink, hal::CaptureInfo* info, std::string* error) override;
+    void stopCapture() override;
+    void randomBytes(uint8_t* out, size_t len) override;
+    std::string aesGcmEncrypt(const std::string& key, const std::string& iv, const std::string& aad, const std::string& plain) override;
+    std::string rsaOaepEncrypt(const std::string& spkiDer, const std::string& plain) override;
+
     std::string firmwareVersion() override;
     std::string platformName() override { return "Émulateur PC"; }
 
@@ -63,6 +74,15 @@ private:
     void phoneInit();
     void phoneTick();
     void phoneSample();
+
+    void videoReader(int fd);
+    void audioReader(int fd);
+
+    std::mutex captureMutex_;
+    hal::MediaSink* sink_ = nullptr;
+    std::atomic<bool> capturing_{false};
+    int videoPid_ = -1, audioPid_ = -1;
+    std::thread videoThread_, audioThread_;
 
     std::string dir_;
     int brightness_ = 60;

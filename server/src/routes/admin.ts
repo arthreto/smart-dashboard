@@ -8,6 +8,7 @@ import { recentEvents, logEvent } from '../events.js';
 import { ValidationError } from '../habits.js';
 import { NotFoundError } from '../http.js';
 import { deleteHousehold, household, listHouseholds } from '../households.js';
+import { resetGallery } from '../gallery.js';
 import { deviceOnline, listDevices, removeHouseholdDeviceFiles } from '../device.js';
 import { listServices, revealServiceSecret, serviceDto, SERVICE_IDS, updateService, type ServiceId } from '../services.js';
 import { makeContext } from '../integrations/index.js';
@@ -131,6 +132,7 @@ export function adminRoutes(app: FastifyInstance, db: DB): void {
       return reply.code(400).send({ error: 'last_admin', message: 'Il doit rester au moins un administrateur actif.' });
     }
     const others = (db.prepare('SELECT COUNT(*) AS n FROM users WHERE household_id = ? AND id != ?').get(u.household_id, u.id) as { n: number }).n;
+    resetGallery(u.id);
     if (others === 0) {
       removeHouseholdDeviceFiles(u.household_id);
       deleteHousehold(u.household_id);

@@ -11,6 +11,9 @@ services connectés).
   son foyer, avec des données séparées (une base par foyer).
 - **Panel administrateur** : comptes, invitations, services proposés, clés d'API
   communes (l'app Spotify du serveur) et journal du serveur.
+- **Galerie chiffrée de bout en bout** : enregistrements vidéo de la caméra de la
+  tablette, lancés depuis la console, lisibles seulement avec ton code secret (le
+  serveur ne stocke que des données chiffrées).
 
 | Écran (émulateur) | Ce qu'il affiche |
 |---|---|

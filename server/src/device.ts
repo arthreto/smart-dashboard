@@ -8,6 +8,8 @@ import type { DB } from './db.js';
 import { getSetting, setSetting } from './db.js';
 import { config } from './config.js';
 import { randomToken, sha256 } from './crypto.js';
+import { wakeDevice } from './wake.js';
+import { START_TIMEOUT_MS } from './gallery.js';
 import { logEvent } from './events.js';
 import { ValidationError, HabitBook, computeBadges, computeStats, habitMeta } from './habits.js';
 import { getRoutine, listAlarms, nextAlarm } from './alarms.js';
@@ -408,6 +410,14 @@ export function queueCommand(db: DB, d: DeviceRow, type: unknown, text: unknown)
     d.id,
   );
   logEvent(db, 'console', 'info', type === 'message' ? `Message envoyé à « ${d.name} » : « ${(text as string).trim()} »` : `Commande envoyée à « ${d.name} » : ${type}`);
+  wakeDevice(d.id);
+  return Number(res.lastInsertRowid);
+}
+
+/** Commande interne (ex. « record_start » de la galerie), sans validation ni journal. */
+export function queueInternalCommand(db: DB, d: DeviceRow, type: string, text: string | null): number {
+  const res = db.prepare('INSERT INTO commands (type, text, created_at, device_id) VALUES (?, ?, ?, ?)').run(type, text, new Date().toISOString(), d.id);
+  wakeDevice(d.id);
   return Number(res.lastInsertRowid);
 }
 
@@ -415,14 +425,23 @@ export function queueCommand(db: DB, d: DeviceRow, type: unknown, text: unknown)
 export function broadcastMessage(db: DB, householdId: number, text: string): void {
   const ins = db.prepare('INSERT INTO commands (type, text, created_at, device_id) VALUES (?, ?, ?, ?)');
   const now = new Date().toISOString();
-  for (const d of listDevices(householdId)) if (d.token_hash) ins.run('message', text, now, d.id);
+  for (const d of listDevices(householdId)) {
+    if (!d.token_hash) continue;
+    ins.run('message', text, now, d.id);
+    wakeDevice(d.id);
+  }
 }
 
-function pendingCommands(db: DB, deviceId: number) {
+export function pendingCommands(db: DB, deviceId: number) {
   const since = new Date(Date.now() - 24 * 3600_000).toISOString();
+  // Un enregistrement demandé n'est valable que quelques minutes : un écran resté hors ligne
+  // ne doit pas se mettre à filmer des heures plus tard.
+  const recordSince = new Date(Date.now() - START_TIMEOUT_MS).toISOString();
   return db
-    .prepare('SELECT id, type, text FROM commands WHERE acked_at IS NULL AND device_id = ? AND created_at >= ? ORDER BY id')
-    .all(deviceId, since) as {
+    .prepare(
+      "SELECT id, type, text FROM commands WHERE acked_at IS NULL AND device_id = ? AND created_at >= ? AND (type != 'record_start' OR created_at >= ?) ORDER BY id",
+    )
+    .all(deviceId, since, recordSince) as {
     id: number;
     type: string;
     text: string | null;

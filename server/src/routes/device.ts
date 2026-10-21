@@ -6,6 +6,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { DB } from '../db.js';
 import {
   buildDeviceState,
+  pendingCommands,
   deviceFromAuthHeader,
   pairDevice,
   recordHeartbeat,
@@ -26,6 +27,8 @@ import { HttpError } from '../http.js';
 import { household, householdActive } from '../households.js';
 import { deviceSafe } from '../deviceText.js';
 import { sha256 } from '../crypto.js';
+import { waitForWake } from '../wake.js';
+import { GalleryConflict, MAX_CHUNK_BYTES, deviceChunk, deviceFail, deviceStart } from '../gallery.js';
 
 type Body = Record<string, unknown>;
 
@@ -165,6 +168,47 @@ export function deviceRoutes(app: FastifyInstance, mainDb: DB): void {
     const img = await processImage(q.src, Number(q.w ?? 176), Number(q.h ?? 256));
     reply.header('Cache-Control', 'private, max-age=86400');
     return reply.type('image/jpeg').send(img);
+  });
+
+  // Attente longue : se termine dès que la console envoie quelque chose à cet écran
+  // (commande, enregistrement…), sinon au bout de 25 s. L'écran relit alors son état.
+  app.get('/api/v1/wait', dev, async (req) => {
+    // Commande arrivée pendant que l'écran n'écoutait pas (entre deux attentes) : tout de suite.
+    if (pendingCommands(req.hdb!, req.device!.id).length > 0) return { wake: true };
+    const ms = Math.min(Math.max(Number((req.query as { timeout?: string }).timeout ?? 25) || 25, 1), 25) * 1000;
+    const woken = await waitForWake(req.device!.id, ms, (cb) => req.raw.on('close', cb));
+    return { wake: woken };
+  });
+
+  // ------------------------------------------------------------ galerie (vidéos chiffrées)
+  const galleryErrors = async (reply: FastifyReply, fn: () => unknown) => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof GalleryConflict) return reply.code(409).send({ error: 'gallery_conflict', message: err.message });
+      throw err;
+    }
+  };
+
+  app.post('/api/v1/gallery/:id/start', dev, async (req, reply) =>
+    galleryErrors(reply, () => {
+      deviceStart(req.device!, (req.params as { id: string }).id, (req.body ?? {}) as Body);
+      return { ok: true };
+    }),
+  );
+
+  app.post('/api/v1/gallery/:id/chunks/:n', { ...dev, bodyLimit: MAX_CHUNK_BYTES + 1024 }, async (req, reply) => {
+    const body = req.body as Buffer;
+    if (!Buffer.isBuffer(body)) return reply.code(400).send({ error: 'bad_body', message: 'Corps binaire attendu.' });
+    const { id, n } = req.params as { id: string; n: string };
+    const final = req.headers['x-final'] === '1';
+    const dur = req.headers['x-duration-ms'];
+    return galleryErrors(reply, () => deviceChunk(req.device!, id, Number(n), body, final, dur === undefined ? null : Number(dur)));
+  });
+
+  app.post('/api/v1/gallery/:id/fail', dev, async (req) => {
+    deviceFail(req.device!, (req.params as { id: string }).id, ((req.body ?? {}) as Body).message);
+    return { ok: true };
   });
 
   // Capture d'écran (RGB565 brut) envoyée à la demande de la console.

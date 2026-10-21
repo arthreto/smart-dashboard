@@ -56,6 +56,7 @@ import { listCalendars } from '../integrations/icloud.js';
 import { exportBackup, importBackup } from '../backup.js';
 import { NotFoundError, errorMessage } from '../http.js';
 import { getHousehold, household } from '../households.js';
+import { wakeDevice } from '../wake.js';
 
 type Body = Record<string, unknown>;
 
@@ -189,9 +190,16 @@ export function householdRoutes(app: FastifyInstance, mainDb: DB): void {
     return { ok: true };
   });
 
-  app.put('/api/devices/:id/settings', auth, async (req) => saveDeviceDisplay(screen(req), (req.body ?? {}) as Body));
+  app.put('/api/devices/:id/settings', auth, async (req) => {
+    const d = screen(req);
+    const res = saveDeviceDisplay(d, (req.body ?? {}) as Body);
+    wakeDevice(d.id);
+    return res;
+  });
   app.put('/api/devices/:id/layout', auth, async (req) => {
-    saveDeviceLayout(screen(req), ((req.body ?? {}) as Body).widgets);
+    const d = screen(req);
+    saveDeviceLayout(d, ((req.body ?? {}) as Body).widgets);
+    wakeDevice(d.id);
     return { ok: true };
   });
 

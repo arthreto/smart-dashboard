@@ -6,6 +6,7 @@
 #include <deque>
 #include <mutex>
 #include <thread>
+#include <chrono>
 
 namespace api {
 
@@ -108,6 +109,42 @@ void runInWorker(std::function<void()> work, std::function<void()> done, Lane la
         S().jobs[i].push_back({std::move(work), std::move(done)});
     }
     S().cv[i].notify_one();
+}
+
+void postToUi(std::function<void()> fn) {
+    std::lock_guard<std::mutex> lock(S().mutex);
+    S().done.push_back(std::move(fn));
+}
+
+void startWakeListener(std::function<void()> onWake) {
+    static bool started = false;
+    if (started) return;
+    started = true;
+    std::thread([onWake]() {
+        for (;;) {
+            std::string url, token;
+            {
+                std::lock_guard<std::mutex> lock(S().mutex);
+                if (!S().base.empty()) url = S().base + "/api/v1/wait?timeout=25";
+                token = S().token;
+            }
+            if (url.empty() || token.empty() || !hal::get().networkUp()) {
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+                continue;
+            }
+            hal::HttpResponse r = hal::get().http("GET", url, "", {{"Accept", "application/json"}, {"Authorization", "Bearer " + token}}, 40000);
+            if (r.status == 200) {
+                if (r.body.find("\"wake\":true") != std::string::npos) {
+                    postToUi(onWake);
+                    // Laisse à l'écran le temps de lire son état et d'acquitter les commandes.
+                    std::this_thread::sleep_for(std::chrono::seconds(2));
+                }
+                continue;
+            }
+            // Ancien serveur sans attente longue (404) : on se contente des synchros habituelles.
+            std::this_thread::sleep_for(std::chrono::seconds(r.status == 404 ? 300 : 10));
+        }
+    }).detach();
 }
 
 void request(const std::string& method, const std::string& path, const std::string& jsonBody, Callback cb, bool auth, int timeoutMs) {

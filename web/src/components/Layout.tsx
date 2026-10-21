@@ -29,6 +29,7 @@ const NAV: NavItem[] = [
   { to: '/', label: 'Vue d’ensemble', icon: 'home', color: '#0A84FF', strokeWidth: 2.2, end: true },
   { to: '/ecrans', label: 'Mes écrans', icon: 'display', color: '#5E5CE6', strokeWidth: 2.2 },
   { to: '/habitudes', label: 'Tâches & habitudes', icon: 'checkCircle', color: '#30D158', strokeWidth: 2.4 },
+  { to: '/galerie', label: 'Galerie', icon: 'camera', color: '#FF375F', strokeWidth: 2.2 },
   { to: '/services', label: 'Services', icon: 'puzzle', color: '#FF9F0A', strokeWidth: 2.2 },
   { to: '/compte', label: 'Mon compte', icon: 'user', color: '#636369', strokeWidth: 2.2 },
 ];

@@ -9,6 +9,10 @@ namespace util {
 
 std::string sha256Hex(const std::string& data);
 
+std::string base64Encode(const std::string& data);
+/** Décode du base64 standard ; chaîne vide si invalide. */
+std::string base64Decode(const std::string& text);
+
 struct tm localNow();
 std::string hhmm(const struct tm& t);
 /** « Samedi 17 octobre » */
