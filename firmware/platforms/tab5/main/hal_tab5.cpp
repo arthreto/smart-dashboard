@@ -7,6 +7,7 @@
 #include <esp_netif_sntp.h>
 #include <esp_system.h>
 #include <esp_timer.h>
+#include <esp_pthread.h>
 #include <esp_random.h>
 #include <esp_wifi.h>
 #include <mbedtls/gcm.h>
@@ -60,10 +61,6 @@ void Tab5Hal::begin() {
         err = nvs_flash_init();
     }
     ESP_ERROR_CHECK(err);
-
-    // Très tôt (RAM interne encore peu morcelée) : réserver le bloc contigu dont l'encodeur
-    // H.264 de la galerie a besoin. Il est rendu le temps d'un enregistrement.
-    capture_.reserveInternal();
 
     // Bus I2C interne, extenseurs d'E/S (alimentations, reset écran, Wi-Fi…), charge.
     ESP_ERROR_CHECK(bsp_i2c_init());
@@ -692,4 +689,16 @@ std::string Tab5Hal::rsaOaepEncrypt(const std::string& spkiDer, const std::strin
         return {};
     }
     return out;
+}
+
+// ---------------------------------------------------------------- threads
+
+void Tab5Hal::prepareThread(bool writesFlash) {
+    // La configuration vaut pour les threads créés ensuite par le thread appelant.
+    // 16 Ko : TLS + JSON. En PSRAM sauf si le thread écrit dans la NVS (Wi-Fi), car une
+    // écriture en flash coupe le cache et rend la PSRAM inaccessible pendant ce temps.
+    esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
+    cfg.stack_size = 16384;
+    cfg.stack_alloc_caps = writesFlash ? (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) : (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (esp_pthread_set_cfg(&cfg) != ESP_OK) ESP_LOGW(TAG, "configuration des threads refusée");
 }

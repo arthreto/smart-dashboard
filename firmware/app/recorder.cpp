@@ -347,6 +347,7 @@ bool start(const std::string& videoId, const std::string& publicKeyB64) {
         s = std::make_shared<Session>(videoId, publicKeyB64);
         g_session = s;
     }
+    hal::get().prepareThread(false);
     std::thread([s]() {
         bool isError = false;
         std::string msg = s->run(&isError);

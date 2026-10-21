@@ -29,9 +29,6 @@ constexpr int H264_GOP = 30;            // une image clé par seconde (pour se d
 constexpr int AUDIO_RATE = 48000;
 constexpr int AUDIO_BITRATE = 64000;
 constexpr float MIC_GAIN_DB = 30.0f;
-// Trame de référence de l'encodeur H.264 à 1280 de large : ~92 Ko ; on réserve un peu plus,
-// aligné sur la ligne de cache (128 o), pour la lui garantir d'un seul tenant.
-constexpr size_t RESERVE_BYTES = 100 * 1024;
 
 /** Vrai si le flux H.264 (Annex B) contient une image IDR ou des paramètres SPS. */
 bool hasKeyNal(const uint8_t* p, size_t n) {
@@ -110,12 +107,6 @@ bool Tab5Capture::initCamera(std::string* error) {
     }
     videoInit_ = true;
     return true;
-}
-
-void Tab5Capture::reserveInternal() {
-    if (reserve_ || running_) return;
-    reserve_ = heap_caps_aligned_alloc(128, RESERVE_BYTES, MALLOC_CAP_INTERNAL);
-    if (!reserve_) ESP_LOGW(TAG, "réserve de RAM interne impossible (%u o) : l'encodeur pourrait manquer de mémoire", static_cast<unsigned>(RESERVE_BYTES));
 }
 
 bool Tab5Capture::openPipeline(std::string* error) {
@@ -217,12 +208,7 @@ bool Tab5Capture::openPipeline(std::string* error) {
         return false;
     }
 
-    // Juste avant que l'encodeur n'alloue sa trame de référence : on rend la RAM interne
-    // réservée au démarrage, pour qu'il s'y serve sur un bloc contigu encore intact.
-    if (reserve_) {
-        heap_caps_free(reserve_);
-        reserve_ = nullptr;
-    }
+    // Repère : l'encodeur H.264 réclame ~92 Ko de RAM interne d'un seul tenant (trame de référence).
     ESP_LOGI(TAG, "RAM interne libre avant l'encodeur : %u o (plus grand bloc %u o)",
              static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
              static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
@@ -266,8 +252,6 @@ void Tab5Capture::closePipeline() {
         close(encFd_);
         encFd_ = -1;
     }
-    // L'encodeur a rendu sa mémoire : on reprend la réserve pour le prochain enregistrement.
-    reserveInternal();
 }
 
 bool Tab5Capture::start(hal::MediaSink* sink, hal::CaptureInfo* info, std::string* error) {

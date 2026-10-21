@@ -81,6 +81,8 @@ public:
     std::string aesGcmEncrypt(const std::string& key, const std::string& iv, const std::string& aad, const std::string& plain) override;
     std::string rsaOaepEncrypt(const std::string& spkiDer, const std::string& plain) override;
 
+    void prepareThread(bool writesFlash) override;
+
     std::string firmwareVersion() override;
     std::string platformName() override { return "M5Stack Tab5"; }
 

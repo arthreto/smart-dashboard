@@ -161,6 +161,14 @@ public:
     /** RSA-OAEP (SHA-256) avec une clé publique SubjectPublicKeyInfo (DER) ; vide en cas d'échec. */
     virtual std::string rsaOaepEncrypt(const std::string& spkiDer, const std::string& plain) = 0;
 
+    // --- Threads ---
+    /**
+     * À appeler juste avant de créer un std::thread. Sur la tablette, la pile du thread va
+     * en PSRAM (pour garder la RAM interne, rare, à l'encodeur vidéo), sauf si le thread
+     * écrit dans la flash (`writesFlash`) : une pile en PSRAM y est interdite.
+     */
+    virtual void prepareThread(bool writesFlash) { (void)writesFlash; }
+
     // --- Divers ---
     virtual std::string firmwareVersion() = 0;
     virtual std::string platformName() = 0;

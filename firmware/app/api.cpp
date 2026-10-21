@@ -60,7 +60,11 @@ void worker(int lane) {
 void start() {
     if (S().started) return;
     S().started = true;
+    // Le thread de l'API connecte aussi le Wi-Fi (identifiants écrits en flash) : pile interne.
+    // Les threads d'images n'écrivent jamais en flash : pile en PSRAM.
+    hal::get().prepareThread(true);
     std::thread(worker, static_cast<int>(Lane::Api)).detach();
+    hal::get().prepareThread(false);
     for (int i = 0; i < IMAGE_THREADS; i++) std::thread(worker, static_cast<int>(Lane::Images)).detach();
 }
 
@@ -120,6 +124,7 @@ void startWakeListener(std::function<void()> onWake) {
     static bool started = false;
     if (started) return;
     started = true;
+    hal::get().prepareThread(false);
     std::thread([onWake]() {
         for (;;) {
             std::string url, token;
