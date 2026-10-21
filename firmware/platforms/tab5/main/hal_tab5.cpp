@@ -694,11 +694,8 @@ std::string Tab5Hal::rsaOaepEncrypt(const std::string& spkiDer, const std::strin
 // ---------------------------------------------------------------- threads
 
 void Tab5Hal::prepareThread(bool writesFlash) {
-    // La configuration vaut pour les threads créés ensuite par le thread appelant.
-    // 16 Ko : TLS + JSON. En PSRAM sauf si le thread écrit dans la NVS (Wi-Fi), car une
-    // écriture en flash coupe le cache et rend la PSRAM inaccessible pendant ce temps.
-    esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
-    cfg.stack_size = 16384;
-    cfg.stack_alloc_caps = writesFlash ? (MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) : (MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (esp_pthread_set_cfg(&cfg) != ESP_OK) ESP_LOGW(TAG, "configuration des threads refusée");
+    // Piles en RAM interne pour tous les threads. Les mettre en PSRAM (pour libérer de la
+    // RAM interne à l'encodeur vidéo) empêchait la tablette de démarrer : à ne pas refaire
+    // sans le journal série qui explique pourquoi.
+    (void)writesFlash;
 }
