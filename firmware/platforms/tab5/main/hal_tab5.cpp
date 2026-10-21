@@ -368,23 +368,37 @@ std::string Tab5Hal::wifiSsid() { return loadRaw("wifi_ssid"); }
 
 // ---------------------------------------------------------------- HTTP(S)
 
+namespace {
+// Réutilisation de la connexion HTTPS, par thread réseau. Une poignée de main TLS coûte ~1 à
+// 2 s sur l'ESP32-P4 ; la refaire à chaque morceau de vidéo rend l'envoi très lent et fragile.
+// On garde donc le client (et sa connexion) ouvert entre deux requêtes au même hôte.
+struct ReusableHttp {
+    esp_http_client_handle_t handle = nullptr;
+    std::string origin;                  // « https://hôte:port » de la connexion en cours
+    std::vector<std::string> headerKeys; // en-têtes posés (à retirer avant la requête suivante)
+};
+thread_local ReusableHttp g_http;
+
+std::string originOf(const std::string& url) {
+    size_t s = url.find("://");
+    if (s == std::string::npos) return url;
+    size_t e = url.find('/', s + 3);
+    return url.substr(0, e == std::string::npos ? url.size() : e);
+}
+
+void dropHttp() {
+    if (g_http.handle) esp_http_client_cleanup(g_http.handle);
+    g_http.handle = nullptr;
+    g_http.origin.clear();
+    g_http.headerKeys.clear();
+}
+}  // namespace
+
 hal::HttpResponse Tab5Hal::http(const std::string& method, const std::string& url, const std::string& body, const hal::Headers& headers,
                                 int timeoutMs) {
     hal::HttpResponse res;
     if (!networkUp()) {
         res.error = "Wi-Fi non connecté";
-        return res;
-    }
-    esp_http_client_config_t cfg = {};
-    cfg.url = url.c_str();
-    cfg.timeout_ms = timeoutMs;
-    cfg.crt_bundle_attach = esp_crt_bundle_attach;
-    cfg.buffer_size = 4096;
-    cfg.buffer_size_tx = 2048;
-    cfg.user_agent = "smart-dashboard-tab5/" SD_FIRMWARE_VERSION;
-    esp_http_client_handle_t c = esp_http_client_init(&cfg);
-    if (!c) {
-        res.error = "client HTTP indisponible";
         return res;
     }
     esp_http_client_method_t m = HTTP_METHOD_GET;
@@ -393,63 +407,108 @@ hal::HttpResponse Tab5Hal::http(const std::string& method, const std::string& ur
     else if (method == "DELETE") m = HTTP_METHOD_DELETE;
     else if (method == "PATCH") m = HTTP_METHOD_PATCH;
     else if (method == "HEAD") m = HTTP_METHOD_HEAD;
-    esp_http_client_set_method(c, m);
-    for (const auto& [k, v] : headers) esp_http_client_set_header(c, k.c_str(), v.c_str());
+    std::string origin = originOf(url);
     int toSend = m == HTTP_METHOD_GET ? 0 : static_cast<int>(body.size());
 
-    // Les redirections (ex. http:// → https:// posée par Certbot) sont suivies en gardant
-    // la méthode et le corps de la requête.
-    for (int hop = 0;; hop++) {
-        esp_err_t err = esp_http_client_open(c, toSend);
-        if (err != ESP_OK) {
-            res.error = std::string("connexion impossible (") + esp_err_to_name(err) + ")";
-            break;
+    // Une connexion réutilisée peut avoir été fermée par le serveur (délai d'inactivité) :
+    // dans ce cas on refait une tentative avec une connexion neuve.
+    for (int attempt = 0; attempt < 2; attempt++) {
+        if (g_http.handle && g_http.origin != origin) dropHttp();
+        if (!g_http.handle) {
+            esp_http_client_config_t cfg = {};
+            cfg.url = url.c_str();
+            cfg.crt_bundle_attach = esp_crt_bundle_attach;
+            cfg.buffer_size = 4096;
+            cfg.buffer_size_tx = 2048;
+            cfg.user_agent = "smart-dashboard-tab5/" SD_FIRMWARE_VERSION;
+            cfg.keep_alive_enable = true;
+            g_http.handle = esp_http_client_init(&cfg);
+            if (!g_http.handle) {
+                res.error = "client HTTP indisponible";
+                return res;
+            }
+            g_http.origin = origin;
         }
-        // Gros corps (vidéos, captures) : esp_http_client_write peut n'en écrire qu'une partie.
-        int sent = 0;
-        while (sent < toSend) {
-            int w = esp_http_client_write(c, body.data() + sent, std::min(toSend - sent, 16384));
-            if (w <= 0) break;
-            sent += w;
+        esp_http_client_handle_t c = g_http.handle;
+        esp_http_client_set_timeout_ms(c, timeoutMs);
+        esp_http_client_set_url(c, url.c_str());
+        esp_http_client_set_method(c, m);
+        for (const auto& k : g_http.headerKeys) esp_http_client_delete_header(c, k.c_str());
+        g_http.headerKeys.clear();
+        for (const auto& [k, v] : headers) {
+            esp_http_client_set_header(c, k.c_str(), v.c_str());
+            g_http.headerKeys.push_back(k);
         }
-        if (sent < toSend) {
-            res.error = "envoi interrompu";
-            esp_http_client_close(c);
-            break;
-        }
-        esp_http_client_fetch_headers(c);
-        int status = esp_http_client_get_status_code(c);
-        bool redirect = status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
-        if (redirect && hop < 3 && esp_http_client_set_redirection(c) == ESP_OK) {
-            esp_http_client_close(c);
-            continue;
-        }
-        if (status <= 0) {
-            res.error = "réponse invalide";
-            esp_http_client_close(c);
-            break;
-        }
-        char buf[2048];
-        for (;;) {
-            int n = esp_http_client_read(c, buf, sizeof buf);
-            if (n < 0) {
-                res.error = "lecture interrompue";
-                status = 0;
+
+        res = hal::HttpResponse{};
+        bool stale = false;  // échec sur une connexion réutilisée : on réessaie à neuf
+        for (int hop = 0;; hop++) {
+            esp_err_t err = esp_http_client_open(c, toSend);
+            if (err != ESP_OK) {
+                stale = true;
+                res.error = std::string("connexion impossible (") + esp_err_to_name(err) + ")";
                 break;
             }
-            if (n == 0) break;
-            res.body.append(buf, static_cast<size_t>(n));
-            if (res.body.size() > 6u * 1024u * 1024u) {
-                res.error = "réponse trop volumineuse";
-                status = 0;
+            int sent = 0;
+            while (sent < toSend) {
+                int w = esp_http_client_write(c, body.data() + sent, std::min(toSend - sent, 16384));
+                if (w <= 0) break;
+                sent += w;
+            }
+            if (sent < toSend) {
+                stale = true;
+                res.error = "envoi interrompu";
                 break;
             }
+            esp_http_client_fetch_headers(c);
+            int status = esp_http_client_get_status_code(c);
+            bool redirect = status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+            if (redirect && hop < 3 && esp_http_client_set_redirection(c) == ESP_OK) {
+                esp_http_client_close(c);
+                continue;
+            }
+            if (status <= 0) {
+                stale = true;
+                res.error = "réponse invalide";
+                break;
+            }
+            char buf[2048];
+            bool ok = true;
+            for (;;) {
+                int n = esp_http_client_read(c, buf, sizeof buf);
+                if (n < 0) {
+                    stale = true;
+                    res.error = "lecture interrompue";
+                    ok = false;
+                    break;
+                }
+                if (n == 0) break;
+                res.body.append(buf, static_cast<size_t>(n));
+                if (res.body.size() > 6u * 1024u * 1024u) {
+                    res.error = "réponse trop volumineuse";
+                    ok = false;
+                    break;
+                }
+            }
+            if (ok) res.status = status;
+            break;
         }
-        res.status = status;
-        esp_http_client_close(c);
-        break;
+
+        // La connexion reste ouverte pour la prochaine requête (keep-alive). En cas de pépin,
+        // on la jette : si c'était une connexion réutilisée, on retente une fois à neuf.
+        if (!stale) {
+            if (res.status > 0) {
+                esp_http_client_close(c);  // garde le socket ouvert (keep-alive)
+            } else {
+                dropHttp();
+            }
+            return res;
+        }
+        bool wasReused = (attempt == 0);
+        dropHttp();
+        if (!wasReused) return res;
+        // sinon : seconde tentative avec une connexion neuve
     }
-    esp_http_client_cleanup(c);
     return res;
 }
 

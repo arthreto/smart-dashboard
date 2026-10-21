@@ -97,17 +97,27 @@ async function fetchChunk(id: string, n: number, signal?: AbortSignal): Promise<
 /** Déchiffre toute la vidéo et en fait un MP4. `onProgress` reçoit 0..1. */
 export async function loadVideo(id: string, onProgress?: (p: number) => void, signal?: AbortSignal): Promise<{ mp4: Uint8Array; durationMs: number }> {
   const { meta, vk } = await videoKey(id);
-  const parts: Uint8Array[] = [];
+  const parts: Uint8Array[] = new Array(meta.chunks);
+  // Récupération et déchiffrement en parallèle (la latence réseau domine) : nettement plus
+  // rapide que morceau par morceau. Chaque morceau est indépendant ; on les range dans l'ordre.
+  const CONCURRENCY = 6;
+  let next = 0;
+  let done = 0;
+  const worker = async () => {
+    for (;;) {
+      const n = next++;
+      if (n >= meta.chunks) return;
+      const data = await fetchChunk(id, n, signal);
+      const final = meta.complete && n === meta.chunks - 1;
+      parts[n] = await decryptChunk(vk, id, n, final, data);
+      done++;
+      onProgress?.(done / meta.chunks);
+      touch();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, meta.chunks) }, worker));
   let total = 0;
-  for (let n = 0; n < meta.chunks; n++) {
-    const data = await fetchChunk(id, n, signal);
-    const final = meta.complete && n === meta.chunks - 1;
-    const plain = await decryptChunk(vk, id, n, final, data);
-    parts.push(plain);
-    total += plain.length;
-    onProgress?.((n + 1) / meta.chunks);
-    touch();
-  }
+  for (const p of parts) total += p.length;
   const stream = new Uint8Array(total);
   let o = 0;
   for (const p of parts) {
