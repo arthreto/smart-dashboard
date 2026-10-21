@@ -379,63 +379,24 @@ void App::startRecording(const std::string& json) {
     const cJSON* key = cJSON_GetObjectItemCaseSensitive(o, "publicKey");
     if (cJSON_IsString(id) && cJSON_IsString(key)) {
         if (!hal::get().cameraSupported()) {
-            // L'écran prévient le serveur pour que la console affiche l'erreur.
+            // L'écran prévient le serveur : l'erreur s'affiche dans la galerie de la console.
             std::string vid = id->valuestring;
             api::request("POST", "/api/v1/gallery/" + vid + "/fail", R"({"message":"Pas de caméra sur cet écran"})", nullptr);
-            toast("Enregistrement impossible : pas de caméra", true);
-        } else if (recorder::start(id->valuestring, key->valuestring)) {
-            updateRecBadge();
+        } else {
+            recorder::start(id->valuestring, key->valuestring);
         }
     }
     cJSON_Delete(o);
 }
 
 /**
- * Pastille « ● REC 00:42 » en haut de l'écran pendant un enregistrement, avec un bouton
- * pour l'arrêter : personne ne peut être filmé par la tablette sans le voir.
+ * L'enregistrement ne s'affiche pas sur la tablette (demande de l'utilisateur, qui est le
+ * propriétaire de l'écran) : on vide seulement les messages de fin pour qu'ils ne
+ * s'accumulent pas. Le début, la fin et les erreurs sont visibles dans la galerie de la console.
  */
 void App::updateRecBadge() {
     bool noticeError = false;
-    std::string notice = recorder::takeNotice(&noticeError);
-    if (!notice.empty()) toast(notice, noticeError);
-
-    recorder::Status st = recorder::status();
-    if (!st.active) {
-        if (recBadge_) {
-            lv_obj_delete(recBadge_);
-            recBadge_ = nullptr;
-            recLabel_ = nullptr;
-        }
-        return;
-    }
-    if (!recBadge_) {
-        recBadge_ = row(lv_layer_top(), 12);
-        lv_obj_set_height(recBadge_, 52);
-        lv_obj_set_style_pad_left(recBadge_, 20, 0);
-        lv_obj_set_style_pad_right(recBadge_, 6, 0);
-        lv_obj_set_style_radius(recBadge_, 26, 0);
-        setBg(recBadge_, lv_color_hex(0x1C1C1E), 235);
-        lv_obj_set_style_shadow_width(recBadge_, 24, 0);
-        lv_obj_set_style_shadow_opa(recBadge_, 80, 0);
-        dot(recBadge_, 14, color::red());
-        recLabel_ = label(recBadge_, "", &fig_s16, color::white());
-        lv_obj_t* b = button(recBadge_, "Arrêter", color::red(), color::white(), 40, 0, &fig_s14);
-        onClick(b, [] {
-            recorder::stop();
-            App::get().updateRecBadge();
-        });
-        lv_obj_align(recBadge_, LV_ALIGN_TOP_MID, RAIL_W / 2, 14);
-    }
-    std::string text;
-    int s = st.seconds;
-    char t[16];
-    std::snprintf(t, sizeof t, "%02d:%02d", s / 60, s % 60);
-    if (st.stopping) text = "Envoi de la fin…";
-    else text = std::string("REC ") + t + (st.offline ? " · réseau perdu, envoi en attente" : "");
-    lv_label_set_text(recLabel_, text.c_str());
-    // Le bouton disparaît une fois l'arrêt demandé.
-    lv_obj_t* btn = lv_obj_get_child(recBadge_, 2);
-    if (btn && st.stopping) lv_obj_add_flag(btn, LV_OBJ_FLAG_HIDDEN);
+    recorder::takeNotice(&noticeError);
 }
 
 void App::takeScreenshot() {

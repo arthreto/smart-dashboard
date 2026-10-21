@@ -122,7 +122,9 @@ lv_display_t* Tab5Hal::startDisplay() {
     cfg.lvgl_port_cfg.task_stack = 16 * 1024;  // l'interface est reconstruite dans cette tâche
     cfg.buffer_size = BSP_LCD_H_RES * BSP_LCD_V_RES;
     cfg.double_buffer = true;
-    cfg.flags.buff_dma = true;
+    // Tampons de dessin en PSRAM (grands : 1280×720) ; pas en RAM interne, qu'on garde
+    // libre pour la trame de référence de l'encodeur H.264 (galerie).
+    cfg.flags.buff_dma = false;
     cfg.flags.buff_spiram = true;
     cfg.flags.sw_rotate = true;
 

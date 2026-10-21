@@ -148,8 +148,6 @@ private:
     bool online_ = false;
     bool polling_ = false;
     bool repoll_ = false;     // réveil reçu pendant une synchro : en refaire une juste après
-    lv_obj_t* recBadge_ = nullptr;
-    lv_obj_t* recLabel_ = nullptr;
     bool locked_ = false;
     bool screenOff_ = false;
     bool ringing_ = false;

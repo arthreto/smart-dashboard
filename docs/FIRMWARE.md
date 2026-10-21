@@ -151,8 +151,8 @@ compile sans étape supplémentaire.
 ## Galerie (enregistrements vidéo)
 
 Dans la console, l'onglet **Galerie** lance et arrête un enregistrement de la caméra de la
-tablette. Pendant l'enregistrement, la tablette affiche en haut de l'écran une pastille
-**« ● REC 00:42 »** avec un bouton **Arrêter** ; personne ne peut être filmé sans le voir.
+tablette. L'état de l'enregistrement (en cours, durée, arrêt) et les éventuelles erreurs
+s'affichent dans la console ; rien n'apparaît sur l'écran de la tablette.
 
 - La vidéo (1280×720, 30 images/s, environ 2 Mb/s, son AAC) est chiffrée sur la tablette
   avant l'envoi, par morceaux de 3 secondes. Le serveur ne reçoit que des données illisibles.

@@ -225,7 +225,7 @@ function RecordCard({ data, now, onChange }: { data: GalleryState; now: number; 
           <h2 id="rec-title" className="card-title">
             Enregistrer
           </h2>
-          <div className="card-sub">Caméra et micro de la tablette. Elle affiche « ● REC » tant que l’enregistrement dure (1 h au plus).</div>
+          <div className="card-sub">Caméra et micro de la tablette (1 h au plus). L’enregistrement se suit ici.</div>
         </div>
       </div>
       {data.devices.length === 0 ? (

@@ -10,6 +10,7 @@
 #include <sys/mman.h>
 #include <unistd.h>
 
+#include <cerrno>
 #include <cstring>
 #include <vector>
 
@@ -41,6 +42,13 @@ bool hasKeyNal(const uint8_t* p, size_t n) {
         }
     }
     return false;
+}
+
+/** Message d'erreur avec l'errno, pour savoir précisément ce qui a échoué sur l'écran. */
+std::string errMsg(const char* what) {
+    char buf[96];
+    std::snprintf(buf, sizeof buf, "%s (err %d : %s)", what, errno, strerror(errno));
+    return buf;
 }
 
 bool setCtrl(int fd, uint32_t id, int32_t value) {
@@ -102,16 +110,20 @@ bool Tab5Capture::initCamera(std::string* error) {
 }
 
 bool Tab5Capture::openPipeline(std::string* error) {
+    // Repère mémoire : l'encodeur H.264 réclame ~90 Ko de RAM interne contiguë.
+    ESP_LOGI(TAG, "RAM interne libre : %u o (plus grand bloc %u o)",
+             static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL)),
+             static_cast<unsigned>(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)));
     // --- Caméra : format du capteur, sortie YUV420 par l'ISP ---
     camFd_ = open(ESP_VIDEO_MIPI_CSI_DEVICE_NAME, O_RDONLY);
     if (camFd_ < 0) {
-        *error = "Caméra indisponible";
+        *error = errMsg("Caméra absente ou non branchée");
         return false;
     }
     struct v4l2_format fmt = {};
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (ioctl(camFd_, VIDIOC_G_FMT, &fmt) != 0) {
-        *error = "Caméra : format inconnu";
+        *error = errMsg("Caméra : format inconnu");
         return false;
     }
     width_ = static_cast<int>(fmt.fmt.pix.width);
@@ -123,7 +135,7 @@ bool Tab5Capture::openPipeline(std::string* error) {
     want.fmt.pix.height = height_;
     want.fmt.pix.pixelformat = V4L2_PIX_FMT_YUV420;
     if (ioctl(camFd_, VIDIOC_S_FMT, &want) != 0) {
-        *error = "Caméra : YUV420 refusé";
+        *error = errMsg("Caméra : YUV420 refusé");
         return false;
     }
     struct v4l2_requestbuffers req = {};
@@ -131,7 +143,7 @@ bool Tab5Capture::openPipeline(std::string* error) {
     req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     req.memory = V4L2_MEMORY_MMAP;
     if (ioctl(camFd_, VIDIOC_REQBUFS, &req) != 0) {
-        *error = "Caméra : mémoire insuffisante";
+        *error = errMsg("Caméra : mémoire insuffisante");
         return false;
     }
     for (int i = 0; i < CAM_BUFFERS; i++) {
@@ -154,7 +166,7 @@ bool Tab5Capture::openPipeline(std::string* error) {
     // --- Encodeur H.264 matériel (mémoire à mémoire) ---
     encFd_ = open(ESP_VIDEO_H264_DEVICE_NAME, O_RDONLY);
     if (encFd_ < 0) {
-        *error = "Encodeur H.264 indisponible";
+        *error = errMsg("Encodeur H.264 indisponible");
         return false;
     }
     if (!setCtrl(encFd_, V4L2_CID_MPEG_VIDEO_H264_I_PERIOD, H264_GOP)) ESP_LOGW(TAG, "période des images clés refusée");
@@ -182,7 +194,7 @@ bool Tab5Capture::openPipeline(std::string* error) {
     capReq.memory = V4L2_MEMORY_MMAP;
     if (ioctl(encFd_, VIDIOC_S_FMT, &out) != 0 || ioctl(encFd_, VIDIOC_REQBUFS, &outReq) != 0 ||
         ioctl(encFd_, VIDIOC_S_FMT, &cap) != 0 || ioctl(encFd_, VIDIOC_REQBUFS, &capReq) != 0) {
-        *error = "Encodeur H.264 : configuration refusée";
+        *error = errMsg("Encodeur H.264 : configuration refusée");
         return false;
     }
     struct v4l2_buffer buf = {};
@@ -201,13 +213,18 @@ bool Tab5Capture::openPipeline(std::string* error) {
     }
 
     int type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    bool ok = ioctl(encFd_, VIDIOC_STREAMON, &type) == 0;
+    if (ioctl(encFd_, VIDIOC_STREAMON, &type) != 0) {
+        *error = errMsg("H.264 : démarrage (capture) impossible");
+        return false;
+    }
     type = V4L2_BUF_TYPE_VIDEO_OUTPUT;
-    ok = ok && ioctl(encFd_, VIDIOC_STREAMON, &type) == 0;
+    if (ioctl(encFd_, VIDIOC_STREAMON, &type) != 0) {
+        *error = errMsg("H.264 : démarrage (sortie) impossible");
+        return false;
+    }
     type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
-    ok = ok && ioctl(camFd_, VIDIOC_STREAMON, &type) == 0;
-    if (!ok) {
-        *error = "Caméra : démarrage impossible";
+    if (ioctl(camFd_, VIDIOC_STREAMON, &type) != 0) {
+        *error = errMsg("Caméra : démarrage du flux impossible");
         return false;
     }
     return true;
